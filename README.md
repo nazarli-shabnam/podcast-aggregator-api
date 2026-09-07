@@ -77,5 +77,5 @@ pytest --cov=app --cov-report=term-missing --cov-fail-under=90
 ```
 
 All of the above run in CI (`.github/workflows/ci.yml`) on every pull request to `main`
-against live PostgreSQL and Redis services. `main` is protected by the ruleset in
-`.github/rulesets/main-protection.json` (PR required, `ci` must pass, linear history).
+against live PostgreSQL and Redis services. `main` is protected by a repository ruleset
+configured in GitHub Settings → Rules (PR required, `ci` must pass, linear history).
