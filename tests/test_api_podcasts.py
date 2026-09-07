@@ -60,6 +60,47 @@ async def test_podcast_detail_cursor_pagination(client, db_session) -> None:
     assert [i["title"] for i in page2["items"]] == ["Episode 2", "Episode 1"]
 
 
+async def test_podcast_detail_cursor_survives_null_published_at_boundary(
+    client, db_session
+) -> None:
+    """Regression test: an episode with published_at=NULL sorts as "now"
+    (coalesced), so it lands first/newest. When it's the sole item on a
+    page, the encoded cursor must reflect that coalesced value - not a
+    NULL-derived epoch sentinel - or the next page comes back empty even
+    though older, real episodes still exist.
+    """
+    pid = await upsert_podcast(
+        db_session,
+        {
+            "title": "Undated Episode Show",
+            "rss_feed_url": "https://feeds.test/undated",
+        },
+    )
+    base = datetime(2025, 1, 1, tzinfo=UTC)
+    await upsert_episodes(
+        db_session,
+        pid,
+        [
+            {"guid": "past-1", "title": "Old Episode 1", "published_at": base},
+            {"guid": "past-2", "title": "Old Episode 2", "published_at": base + timedelta(days=1)},
+            {"guid": "undated", "title": "Undated Episode", "published_at": None},
+        ],
+    )
+    await db_session.commit()
+
+    first = await client.get(f"/api/v1/podcasts/{pid}", params={"limit": 1})
+    assert first.status_code == 200
+    page1 = first.json()["episodes"]
+    assert [i["title"] for i in page1["items"]] == ["Undated Episode"]
+    assert page1["next_cursor"]
+
+    second = await client.get(
+        f"/api/v1/podcasts/{pid}", params={"limit": 10, "cursor": page1["next_cursor"]}
+    )
+    page2 = second.json()["episodes"]
+    assert [i["title"] for i in page2["items"]] == ["Old Episode 2", "Old Episode 1"]
+
+
 async def test_podcast_detail_404(client) -> None:
     resp = await client.get("/api/v1/podcasts/00000000-0000-0000-0000-000000000000")
     assert resp.status_code == 404

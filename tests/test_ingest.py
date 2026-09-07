@@ -24,6 +24,63 @@ async def test_ingest_chart_is_idempotent(db_session) -> None:
     assert count == len(ids1)
 
 
+async def test_ingest_chart_removes_stale_ranks_on_same_day_reingest(
+    db_session, monkeypatch
+) -> None:
+    """Regression test: a same-day re-scrape that returns fewer entries
+    than an earlier run must not leave stale rows at the dropped ranks -
+    those would keep pointing at podcasts from the earlier, larger scrape.
+    """
+    from datetime import date
+
+    from app.services.dto import ChartEntryDTO
+
+    def _make_scraper(entries: list[ChartEntryDTO]):
+        class _Stub:
+            source = ChartSource.SPOTIFY
+
+            async def fetch(self, country: str, category: str) -> list[ChartEntryDTO]:
+                return entries
+
+        return _Stub()
+
+    today = date.today()
+    full_chart = [
+        ChartEntryDTO(
+            rank=i,
+            source=ChartSource.SPOTIFY,
+            country="us",
+            category="technology",
+            title=f"Show {i}",
+            rss_feed_url=f"https://feeds.test/show-{i}",
+        )
+        for i in (1, 2, 3)
+    ]
+    monkeypatch.setattr(ingest_mod, "get_scraper", lambda _s: _make_scraper(full_chart))
+    ids_full = await ingest_chart(db_session, ChartSource.SPOTIFY, "us", "technology", today)
+    assert len(ids_full) == 3
+
+    shrunk_chart = [full_chart[0]]  # only rank 1 this time
+    monkeypatch.setattr(ingest_mod, "get_scraper", lambda _s: _make_scraper(shrunk_chart))
+    await ingest_chart(db_session, ChartSource.SPOTIFY, "us", "technology", today)
+
+    remaining_ranks = (
+        (
+            await db_session.execute(
+                select(ChartSnapshot.rank).where(
+                    ChartSnapshot.source == "spotify",
+                    ChartSnapshot.country == "us",
+                    ChartSnapshot.category == "technology",
+                    ChartSnapshot.snapshot_date == today,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert sorted(remaining_ranks) == [1]
+
+
 async def test_ingest_chart_empty_source_returns_nothing(db_session, monkeypatch) -> None:
     class _Empty:
         source = ChartSource.SPOTIFY

@@ -1,11 +1,29 @@
 from __future__ import annotations
 
+import socket
+from urllib.parse import urlsplit
+
 import httpx
 import pytest
 
 from app.services import feeds as feeds_mod
 from app.services.exceptions import ConfigError
 from app.services.feeds import _parse_datetime, _parse_duration, fetch_feed_episodes, parse_feed
+from app.services.url_safety import PinnedUrl
+
+
+def _fake_pin(url: str) -> PinnedUrl:
+    """Bypass real DNS resolution in tests: pin to a fake-but-plausible IP
+    while keeping the request URL identical to what MockTransport expects.
+    """
+    parts = urlsplit(url)
+    return PinnedUrl(
+        request_url=url,
+        hostname=parts.hostname or "",
+        pinned_ip="203.0.113.1",
+        port=parts.port,
+        scheme=parts.scheme,
+    )
 
 
 def test_parse_duration_variants() -> None:
@@ -33,6 +51,7 @@ async def test_fetch_feed_episodes(monkeypatch: pytest.MonkeyPatch) -> None:
     </channel></rss>"""
 
     def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["host"] == "feed.test"
         return httpx.Response(200, text=feed)
 
     class _CM:
@@ -43,7 +62,7 @@ async def test_fetch_feed_episodes(monkeypatch: pytest.MonkeyPatch) -> None:
             return False
 
     monkeypatch.setattr(feeds_mod, "build_client", lambda **kw: _CM())
-    monkeypatch.setattr(feeds_mod, "ensure_safe_url", lambda url: url)
+    monkeypatch.setattr(feeds_mod, "resolve_safe_url", _fake_pin)
     episodes = await fetch_feed_episodes("http://feed.test/rss")
     assert [e.guid for e in episodes] == ["g1"]
 
@@ -64,7 +83,7 @@ async def test_fetch_feed_episodes_follows_safe_redirect(monkeypatch: pytest.Mon
             return False
 
     monkeypatch.setattr(feeds_mod, "build_client", lambda **kw: _CM())
-    monkeypatch.setattr(feeds_mod, "ensure_safe_url", lambda url: url)
+    monkeypatch.setattr(feeds_mod, "resolve_safe_url", _fake_pin)
     episodes = await fetch_feed_episodes("http://feed.test/old")
     assert [e.guid for e in episodes] == ["g1"]
 
@@ -82,12 +101,37 @@ async def test_fetch_feed_episodes_rejects_unsafe_redirect_target(
         async def __aexit__(self, *exc):
             return False
 
-    def _fake_safe(url: str) -> str:
+    def _fake_resolve(url: str) -> PinnedUrl:
         if "169.254" in url:
             raise ConfigError("blocked")
-        return url
+        return _fake_pin(url)
 
     monkeypatch.setattr(feeds_mod, "build_client", lambda **kw: _CM())
-    monkeypatch.setattr(feeds_mod, "ensure_safe_url", _fake_safe)
+    monkeypatch.setattr(feeds_mod, "resolve_safe_url", _fake_resolve)
     with pytest.raises(ConfigError):
         await fetch_feed_episodes("http://feed.test/old")
+
+
+async def test_fetch_feed_episodes_pins_to_resolved_ip(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The actual outbound request must target the pinned IP, not the
+    hostname - this is what closes the DNS-rebinding gap."""
+    feed = "<rss><channel><item><title>A</title><guid>g1</guid></item></channel></rss>"
+    seen_urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_urls.append(str(request.url))
+        return httpx.Response(200, text=feed)
+
+    class _CM:
+        async def __aenter__(self):
+            return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(feeds_mod, "build_client", lambda **kw: _CM())
+    monkeypatch.setattr(
+        socket, "getaddrinfo", lambda *a, **k: [(None, None, None, None, ("93.184.216.34", 0))]
+    )
+    await fetch_feed_episodes("https://feed.test/rss")
+    assert seen_urls == ["https://93.184.216.34/rss"]

@@ -67,19 +67,24 @@ async def get_podcast(
     if podcast is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="podcast not found")
 
-    published = func.coalesce(Episode.published_at, func.now())
-    stmt = select(Episode).where(Episode.podcast_id == podcast_id)
+    # Sort/keyset key: NULL published_at coalesces to "now" so undated
+    # episodes surface first. The cursor MUST encode this same coalesced
+    # value (not the raw, possibly-NULL published_at) - otherwise a page
+    # boundary landing on an undated episode encodes a NULL-derived
+    # sentinel that doesn't match what was actually used to order it,
+    # and the next page's filter silently excludes every remaining row.
+    sort_key = func.coalesce(Episode.published_at, func.now()).label("sort_key")
+    stmt = select(Episode, sort_key).where(Episode.podcast_id == podcast_id)
     if cursor:
         ts, last_id = decode_cursor(cursor)
-        stmt = stmt.where(or_(published < ts, and_(published == ts, Episode.id < last_id)))
-    stmt = stmt.order_by(published.desc(), Episode.id.desc()).limit(limit + 1)
+        stmt = stmt.where(or_(sort_key < ts, and_(sort_key == ts, Episode.id < last_id)))
+    stmt = stmt.order_by(sort_key.desc(), Episode.id.desc()).limit(limit + 1)
 
-    episodes = list((await session.execute(stmt)).scalars().all())
-    has_more = len(episodes) > limit
-    episodes = episodes[:limit]
-    next_cursor = (
-        encode_cursor(episodes[-1].published_at, episodes[-1].id) if has_more and episodes else None
-    )
+    rows = list((await session.execute(stmt)).all())
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    episodes = [row[0] for row in rows]
+    next_cursor = encode_cursor(rows[-1][1], rows[-1][0].id) if has_more and rows else None
 
     return PodcastDetail(
         **PodcastListItem.model_validate(podcast).model_dump(),
