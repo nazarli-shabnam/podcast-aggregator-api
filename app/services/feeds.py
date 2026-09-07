@@ -12,12 +12,11 @@ from app.core.logging import get_logger
 from app.services.dto import EpisodeDTO
 from app.services.exceptions import ConfigError
 from app.services.http import build_client, request_with_retry
-from app.services.url_safety import ensure_safe_url
+from app.services.url_safety import resolve_safe_url
 
 logger = get_logger(__name__)
 
 _MAX_REDIRECTS = 5
-
 _ITUNES = "{http://www.itunes.com/dtds/podcast-1.0.dtd}"
 
 
@@ -78,20 +77,31 @@ def parse_feed(xml_text: str) -> list[EpisodeDTO]:
 async def fetch_feed_episodes(rss_feed_url: str) -> list[EpisodeDTO]:
     """Fetch and parse a podcast RSS feed.
 
-    Both the initial URL and every redirect hop are validated against
-    :func:`ensure_safe_url` (public http/https hosts only) - redirects are
-    followed manually, one hop at a time, so a feed can't bounce the
-    request to an internal address after the initial check passes.
+    Both the initial URL and every redirect hop are resolved and validated
+    via :func:`resolve_safe_url` (public http/https hosts only), and the
+    HTTP request connects to that *pinned* IP directly rather than letting
+    the client re-resolve the hostname - closing the DNS-rebinding gap
+    where a short-TTL hostname could pass validation but resolve to a
+    private/internal address by the time the connection actually opens.
+    The ``Host`` header and TLS SNI still use the original hostname (via
+    the ``sni_hostname`` request extension), so certificate validation for
+    HTTPS feeds is unaffected.
     """
-    url = ensure_safe_url(rss_feed_url)
+    current_url = rss_feed_url
     async with build_client(follow_redirects=False) as client:
         for _ in range(_MAX_REDIRECTS + 1):
-            resp = await request_with_retry(client, "GET", url)
+            pinned = resolve_safe_url(current_url)
+            headers = {"Host": pinned.hostname}
+            extensions = {"sni_hostname": pinned.hostname} if pinned.scheme == "https" else None
+
+            resp = await request_with_retry(
+                client, "GET", pinned.request_url, headers=headers, extensions=extensions
+            )
             if resp.is_redirect:
                 location = resp.headers.get("location")
                 if not location:
-                    raise ConfigError(f"redirect from {url!r} missing Location header")
-                url = ensure_safe_url(urljoin(url, location))
+                    raise ConfigError(f"redirect from {current_url!r} missing Location header")
+                current_url = urljoin(current_url, location)
                 continue
             resp.raise_for_status()
             return parse_feed(resp.text)

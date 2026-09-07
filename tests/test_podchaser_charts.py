@@ -4,7 +4,7 @@ import pytest
 
 from app.schemas.common import ChartSource
 from app.services.charts import podchaser as podchaser_mod
-from app.services.charts.podchaser import PodchaserChartScraper
+from app.services.charts.podchaser import PodchaserChartScraper, _map_entry
 from app.services.exceptions import ConfigError
 
 
@@ -102,6 +102,54 @@ async def test_fetch_handles_graphql_errors(monkeypatch: pytest.MonkeyPatch) -> 
     assert await PodchaserChartScraper().fetch("us", "technology") == []
 
 
+async def test_fetch_skips_entry_missing_rank_without_crashing_task(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression test: one malformed entry (no "rank") must not raise and
+    take down the whole scrape - it should be skipped, and other, valid
+    entries in the same response still come back."""
+    _set_credentials(monkeypatch)
+
+    responses = [
+        _FakeResp({"access_token": "tok123"}),
+        _FakeResp(
+            {
+                "data": {
+                    "topCharts": {
+                        "data": [
+                            {
+                                # missing "rank" entirely
+                                "podcast": {
+                                    "title": "No Rank Show",
+                                    "rssUrl": "https://feeds.example.com/no-rank",
+                                }
+                            },
+                            {
+                                "rank": 2,
+                                "podcast": {
+                                    "id": "88",
+                                    "title": "Valid Show",
+                                    "rssUrl": "https://feeds.example.com/valid",
+                                },
+                            },
+                        ]
+                    }
+                }
+            }
+        ),
+    ]
+
+    async def _fake_request(*args: object, **kwargs: object) -> _FakeResp:
+        return responses.pop(0)
+
+    monkeypatch.setattr(podchaser_mod, "request_with_retry", _fake_request)
+
+    entries = await PodchaserChartScraper().fetch("us", "technology")
+    assert len(entries) == 1
+    assert entries[0].title == "Valid Show"
+    assert entries[0].rank == 2
+
+
 async def test_fetch_skips_entries_missing_rss_or_title(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_credentials(monkeypatch)
 
@@ -126,3 +174,11 @@ async def test_fetch_skips_entries_missing_rss_or_title(monkeypatch: pytest.Monk
 
     monkeypatch.setattr(podchaser_mod, "request_with_retry", _fake_request)
     assert await PodchaserChartScraper().fetch("us", "technology") == []
+
+
+def test_map_entry_rejects_non_dict_entry() -> None:
+    assert _map_entry("not a dict", "us", "technology") is None  # type: ignore[arg-type]
+
+
+def test_map_entry_rejects_non_dict_podcast() -> None:
+    assert _map_entry({"rank": 1, "podcast": "not a dict"}, "us", "technology") is None

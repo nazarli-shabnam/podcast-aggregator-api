@@ -73,13 +73,27 @@ async def _fetch_access_token() -> str:
 
 
 def _map_entry(rank_entry: dict[str, Any], country: str, category: str) -> ChartEntryDTO | None:
+    """Map one ``topCharts`` entry to a DTO, or None if it's unusable.
+
+    Malformed upstream data (a missing rank, title, or feed URL) skips
+    just this one entry rather than raising - one bad row in an otherwise
+    valid chart response must not crash the whole scrape task.
+    """
+    if not isinstance(rank_entry, dict):
+        logger.warning("podchaser charts: skipping non-object entry %r", rank_entry)
+        return None
+    rank = rank_entry.get("rank")
     podcast = rank_entry.get("podcast") or {}
+    if not isinstance(podcast, dict):
+        logger.warning("podchaser charts: skipping entry with malformed podcast %r", rank_entry)
+        return None
     rss_url = podcast.get("rssUrl")
     title = podcast.get("title")
-    if not rss_url or not title:
+    if not isinstance(rank, int) or not rss_url or not title:
+        logger.warning("podchaser charts: skipping malformed entry %r", rank_entry)
         return None
     return ChartEntryDTO(
-        rank=rank_entry["rank"],
+        rank=rank,
         source=ChartSource.PODCHASER,
         country=country,
         category=category,

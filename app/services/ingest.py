@@ -6,7 +6,7 @@ import uuid
 from dataclasses import asdict
 from datetime import date
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -78,6 +78,26 @@ async def ingest_chart(
         set_={"podcast_id": stmt.excluded.podcast_id, "updated_at": func.now()},
     )
     await session.execute(stmt)
+
+    # A same-day re-scrape (e.g. a manual retry after a partial failure)
+    # can return fewer entries than an earlier successful run that day.
+    # The UPSERT above only touches ranks present in *this* scrape, so
+    # without this cleanup, ranks that dropped out would keep pointing at
+    # a podcast from the earlier run - a stale row silently mixing two
+    # different scrapes into one "snapshot". Remove any leftover ranks
+    # for this exact (source, country, category, snapshot_date) slot that
+    # this scrape didn't reaffirm.
+    current_ranks = {entry.rank for entry in entries}
+    await session.execute(
+        delete(ChartSnapshot).where(
+            ChartSnapshot.source == source.value,
+            ChartSnapshot.country == country.lower(),
+            ChartSnapshot.category == category.lower(),
+            ChartSnapshot.snapshot_date == snapshot_date,
+            ChartSnapshot.rank.notin_(current_ranks),
+        )
+    )
+
     logger.info(
         "ingested %d entries for %s %s/%s @ %s",
         len(rows),
