@@ -52,11 +52,19 @@ celery -A app.core.celery_app beat   -l info
 
 ### Data sources
 
-Apple Podcasts (iTunes Search API) and Podcast Index enrichment clients issue real HTTP
-requests. Spotify and Podchaser chart scrapers are fixture-backed stubs behind a stable
-interface (`app/services/charts/`); the real endpoint integration is a follow-up feature.
-Podcast Index enrichment is skipped gracefully unless
-`PODCASTINDEX_API_KEY` / `PODCASTINDEX_API_SECRET` are set.
+Apple Podcasts (iTunes Search API), Podcast Index enrichment, and Podchaser chart scraping
+issue real HTTP requests. Spotify chart scraping stays a fixture-backed stub behind the same
+`ChartScraper` interface (`app/services/charts/`) **by design, not as a pending TODO** —
+Spotify publishes no official or public podcast-charts API, and scraping their unofficial
+charts webpage would be fragile and outside their published API surface.
+
+Each real integration skips gracefully (logs a warning, contributes no data) when its
+credentials are unset, rather than failing the ingestion task:
+
+| Integration | Env vars |
+|---|---|
+| Podcast Index enrichment | `PODCASTINDEX_API_KEY`, `PODCASTINDEX_API_SECRET` |
+| Podchaser chart scraping | `PODCHASER_CLIENT_ID`, `PODCHASER_CLIENT_SECRET` (OAuth2 client-credentials) |
 
 ## API
 

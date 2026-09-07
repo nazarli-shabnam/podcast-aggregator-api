@@ -7,13 +7,12 @@ from app.services.charts import get_scraper
 from app.services.feeds import parse_feed
 
 
-@pytest.mark.parametrize("source", list(ChartSource))
-async def test_scraper_returns_ranked_entries(source: ChartSource) -> None:
-    scraper = get_scraper(source)
+async def test_spotify_scraper_returns_ranked_fixture_entries() -> None:
+    scraper = get_scraper(ChartSource.SPOTIFY)
     entries = await scraper.fetch("US", "Technology")
     assert entries
     assert [e.rank for e in entries] == sorted(e.rank for e in entries)
-    assert all(e.source is source for e in entries)
+    assert all(e.source is ChartSource.SPOTIFY for e in entries)
     assert all(e.rss_feed_url.startswith("http") for e in entries)
 
 
@@ -22,6 +21,16 @@ async def test_scraper_unknown_country_category_is_empty() -> None:
     # default fixture still applies (fallback); force a source with no fixture dir match
     entries = await scraper.fetch("zz", "nonexistent")
     assert isinstance(entries, list)
+
+
+async def test_podchaser_scraper_skips_without_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("app.core.config.settings.podchaser_client_id", None, raising=False)
+    monkeypatch.setattr("app.core.config.settings.podchaser_client_secret", None, raising=False)
+    scraper = get_scraper(ChartSource.PODCHASER)
+    entries = await scraper.fetch("us", "technology")
+    assert entries == []
 
 
 def test_parse_feed_extracts_episodes() -> None:
