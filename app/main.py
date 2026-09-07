@@ -12,6 +12,7 @@ from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.db import engine
 from app.core.logging import configure_logging, get_logger
+from app.core.redis import close_redis
 
 logger = get_logger(__name__)
 
@@ -22,6 +23,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     logger.info("starting %s (env=%s)", settings.app_name, settings.environment)
     yield
     await engine.dispose()
+    await close_redis()
     logger.info("shutdown complete")
 
 

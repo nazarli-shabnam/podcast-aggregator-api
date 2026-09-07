@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Annotated
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+# pydantic-settings normally JSON-decodes env values for list fields before
+# any validator runs, which rejects a plain comma-separated string like
+# "us,gb". NoDecode skips that JSON step so _split_csv (mode="before")
+# sees - and can parse - the raw string.
+_CsvList = Annotated[list[str], NoDecode]
 
 
 class Settings(BaseSettings):
@@ -18,8 +25,14 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5433/podcasts"
     redis_url: str = "redis://localhost:6379/0"
 
-    chart_countries: list[str] = Field(default_factory=lambda: ["us"])
-    chart_categories: list[str] = Field(default_factory=lambda: ["technology"])
+    chart_countries: _CsvList = Field(default_factory=lambda: ["us"])
+    chart_categories: _CsvList = Field(default_factory=lambda: ["technology"])
+
+    # API auth + rate-limiting. An empty api_keys list means no key
+    # satisfies auth - set at least one to use the API.
+    api_keys: _CsvList = Field(default_factory=list)
+    rate_limit_requests: int = 60
+    rate_limit_window_seconds: int = 60
 
     podcastindex_api_key: str | None = None
     podcastindex_api_secret: str | None = None
@@ -34,7 +47,7 @@ class Settings(BaseSettings):
     http_max_retries: int = 3
     http_rate_limit_per_second: float = 5.0
 
-    @field_validator("chart_countries", "chart_categories", mode="before")
+    @field_validator("chart_countries", "chart_categories", "api_keys", mode="before")
     @classmethod
     def _split_csv(cls, value: object) -> object:
         if isinstance(value, str):

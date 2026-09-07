@@ -68,12 +68,21 @@ credentials are unset, rather than failing the ingestion task:
 
 ## API
 
+Every `/api/v1/*` route requires an `X-API-Key` header matching one of the values in
+`API_KEYS` (comma-separated; an empty list rejects every request). Each key is rate-limited
+independently — `RATE_LIMIT_REQUESTS` per `RATE_LIMIT_WINDOW_SECONDS` (default 60 req/min),
+backed by Redis so it holds across multiple API instances. `/health`, `/docs`, and
+`/openapi.json` stay open, no key required.
+
 | Method & path | Description |
 |---|---|
-| `GET /health` | Liveness + DB check |
+| `GET /health` | Liveness + DB check (no API key required) |
 | `GET /api/v1/charts` | `country`, `category`, `source` (spotify\|podchaser), `date` (default today) |
 | `GET /api/v1/podcasts` | `page`, `page_size`, `q` (title/publisher ILIKE), `category` – offset paginated |
 | `GET /api/v1/podcasts/{id}` | Detail + cursor-paginated episodes (`cursor`, `limit`) |
+
+`/api/v1/*` responses: `401` for a missing/invalid `X-API-Key`, `429` (with a `Retry-After`
+header) once a key exceeds its rate limit.
 
 ## Quality gates
 
