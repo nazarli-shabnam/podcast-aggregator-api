@@ -59,6 +59,58 @@ async def db_session() -> AsyncIterator[AsyncSession]:
         await engine.dispose()
 
 
+@pytest.fixture
+def stub_spotify_scraper(monkeypatch: pytest.MonkeyPatch):
+    """Patch chart ingestion to a fast, offline, deterministic Spotify
+    chart - both SpotifyChartScraper and PodchaserChartScraper make real
+    network calls now, so any test exercising ingest_chart()/get_scraper()
+    generically (not specifically testing a real scraper's own HTTP/parsing
+    logic) should use this instead of hitting the live internet.
+    """
+    from app.schemas.common import ChartSource
+    from app.services import ingest as ingest_mod
+    from app.services.dto import ChartEntryDTO
+
+    entries = [
+        ChartEntryDTO(
+            rank=1,
+            source=ChartSource.SPOTIFY,
+            country="us",
+            category="technology",
+            title="The Daily Tech Brief",
+            rss_feed_url="https://feeds.test/daily-tech-brief",
+            publisher="Aggregator Media",
+        ),
+        ChartEntryDTO(
+            rank=2,
+            source=ChartSource.SPOTIFY,
+            country="us",
+            category="technology",
+            title="Founders & Funders",
+            rss_feed_url="https://feeds.test/founders-and-funders",
+            publisher="Startup Studio",
+        ),
+        ChartEntryDTO(
+            rank=3,
+            source=ChartSource.SPOTIFY,
+            country="us",
+            category="technology",
+            title="Signal & Noise",
+            rss_feed_url="https://feeds.test/signal-and-noise",
+            publisher="Independent",
+        ),
+    ]
+
+    class _Stub:
+        source = ChartSource.SPOTIFY
+
+        async def fetch(self, country: str, category: str) -> list[ChartEntryDTO]:
+            return entries
+
+    monkeypatch.setattr(ingest_mod, "get_scraper", lambda _source: _Stub())
+    return entries
+
+
 @pytest_asyncio.fixture
 async def client(db_session: AsyncSession) -> AsyncIterator[AsyncClient]:
     from app.core.db import get_session

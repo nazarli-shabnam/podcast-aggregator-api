@@ -40,6 +40,10 @@ class Podcast(UUIDPKMixin, TimestampMixin, Base):
     publisher: Mapped[str | None] = mapped_column(String(512))
     rating_average: Mapped[float | None] = mapped_column(Numeric(3, 2))
     rating_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Median days between recent episodes; derived from episode history
+    # (app.services.ingest._compute_release_frequency_days), not fetched
+    # from any enrichment source - none of them expose it directly.
+    release_frequency_days: Mapped[float | None] = mapped_column(Numeric(6, 2))
     categories: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     external_ids: Mapped[dict[str, str]] = mapped_column(JSONB, nullable=False, default=dict)
 

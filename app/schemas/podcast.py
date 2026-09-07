@@ -31,6 +31,7 @@ class PodcastRead(PodcastBase):
     description: str | None = None
     rss_feed_url: str
     external_ids: dict[str, str] = {}
+    release_frequency_days: Decimal | None = None
 
 
 class PodcastDetail(PodcastRead):

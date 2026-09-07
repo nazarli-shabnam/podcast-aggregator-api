@@ -7,22 +7,6 @@ from app.services.charts import get_scraper
 from app.services.feeds import parse_feed
 
 
-async def test_spotify_scraper_returns_ranked_fixture_entries() -> None:
-    scraper = get_scraper(ChartSource.SPOTIFY)
-    entries = await scraper.fetch("US", "Technology")
-    assert entries
-    assert [e.rank for e in entries] == sorted(e.rank for e in entries)
-    assert all(e.source is ChartSource.SPOTIFY for e in entries)
-    assert all(e.rss_feed_url.startswith("http") for e in entries)
-
-
-async def test_scraper_unknown_country_category_is_empty() -> None:
-    scraper = get_scraper(ChartSource.SPOTIFY)
-    # default fixture still applies (fallback); force a source with no fixture dir match
-    entries = await scraper.fetch("zz", "nonexistent")
-    assert isinstance(entries, list)
-
-
 async def test_podchaser_scraper_skips_without_credentials(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

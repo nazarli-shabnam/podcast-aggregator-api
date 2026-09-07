@@ -6,7 +6,9 @@ from app.schemas.common import ChartSource
 from app.services.ingest import ingest_chart
 
 
-async def test_charts_endpoint_returns_ranked_entries(client, db_session) -> None:
+async def test_charts_endpoint_returns_ranked_entries(
+    client, db_session, stub_spotify_scraper
+) -> None:
     await ingest_chart(db_session, ChartSource.SPOTIFY, "us", "technology")
     await db_session.commit()
 
