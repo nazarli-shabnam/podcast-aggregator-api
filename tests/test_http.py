@@ -62,3 +62,25 @@ async def test_request_with_retry_recovers(monkeypatch: pytest.MonkeyPatch) -> N
         resp = await request_with_retry(client, "GET", "http://x/api", max_retries=3)
     assert resp.status_code == 200
     assert calls == 2
+
+
+async def test_request_with_retry_recovers_from_a_transport_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A connection-level failure (not just a bad status code) must also
+    be retried."""
+    _real_sleep = asyncio.sleep
+    monkeypatch.setattr(asyncio, "sleep", lambda _d: _real_sleep(0))
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise httpx.ConnectError("connection refused", request=request)
+        return httpx.Response(200, json={})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        resp = await request_with_retry(client, "GET", "http://x/api", max_retries=3)
+    assert resp.status_code == 200
+    assert calls == 2

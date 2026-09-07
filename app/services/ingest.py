@@ -88,6 +88,16 @@ async def ingest_chart(
     # different scrapes into one "snapshot". Remove any leftover ranks
     # for this exact (source, country, category, snapshot_date) slot that
     # this scrape didn't reaffirm.
+    #
+    # Trade-off: SpotifyChartScraper resolves a feed URL per entry and
+    # silently drops any rank it can't resolve (see spotify.py) - a
+    # *second* same-day scrape that transiently fails to resolve a rank
+    # the first scrape resolved successfully would prune that valid row
+    # here. This is already narrowed by request_with_retry's own
+    # backoff/retries inside the resolution call itself, so only a
+    # persistent (not transient) resolution failure on a same-day re-scrape
+    # can trigger it - accepted as a reasonable trade-off rather than
+    # threading "seen but unresolved" ranks through the scraper interface.
     current_ranks = {entry.rank for entry in entries}
     await session.execute(
         delete(ChartSnapshot).where(

@@ -41,3 +41,8 @@ async def test_upsert_episodes_is_idempotent(db_session) -> None:
     )
     assert len(episodes) == 2
     assert {e.guid: e.title for e in episodes}["g1"] == "Ep 1 v2"
+
+
+async def test_upsert_episodes_with_empty_list_is_a_noop(db_session) -> None:
+    pid = await upsert_podcast(db_session, {"title": "S", "rss_feed_url": "https://feeds.test/s2"})
+    assert await upsert_episodes(db_session, pid, []) == 0

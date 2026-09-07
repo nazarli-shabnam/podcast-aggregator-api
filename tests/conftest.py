@@ -29,8 +29,9 @@ TEST_API_KEY = os.environ["API_KEYS"].split(",")[0].strip()
 
 @pytest.fixture(scope="session", autouse=True)
 def _migrate() -> None:
-    sync_url = TEST_DATABASE_URL.replace("+asyncpg", "+psycopg")
-    sync_engine = create_engine(sync_url)
+    from app.core.config import settings
+
+    sync_engine = create_engine(settings.sync_database_url)
     with sync_engine.begin() as conn:
         conn.execute(text("DROP SCHEMA public CASCADE"))
         conn.execute(text("CREATE SCHEMA public"))
