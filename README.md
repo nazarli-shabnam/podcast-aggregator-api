@@ -52,19 +52,38 @@ celery -A app.core.celery_app beat   -l info
 
 ### Data sources
 
-Apple Podcasts (iTunes Search API), Podcast Index enrichment, and Podchaser chart scraping
-issue real HTTP requests. Spotify chart scraping stays a fixture-backed stub behind the same
-`ChartScraper` interface (`app/services/charts/`) **by design, not as a pending TODO** —
-Spotify publishes no official or public podcast-charts API, and scraping their unofficial
-charts webpage would be fragile and outside their published API surface.
+All chart scraping and enrichment integrations issue real HTTP requests — nothing is
+fixture-backed.
 
-Each real integration skips gracefully (logs a warning, contributes no data) when its
-credentials are unset, rather than failing the ingestion task:
+- **Spotify charts** — Spotify has no official partner API for charts, but
+  `podcastcharts.byspotify.com` is backed by a public, unauthenticated JSON endpoint:
+  `GET https://podcastcharts.byspotify.com/api/charts/{category}?region={country}&limit=N`
+  (`category` is `top-podcasts` for the overall chart, or a genre slug — Spotify uses
+  hyphenated slugs for multi-word genres, e.g. `true-crime`, `health-fitness`,
+  `society-culture`; match `CHART_CATEGORIES` to those for real Spotify scraping). That
+  response has no RSS feed URL (only a Spotify show URI) — many charted shows, especially
+  Spotify-exclusive ones, have no public feed at all — so each entry's feed is resolved via
+  the Apple iTunes Search enrichment client; a show with no resolvable feed is skipped
+  (logged), not treated as a scrape failure.
+- **Podchaser charts** — real OAuth2 client-credentials + GraphQL integration.
+- **Apple Podcasts / Podcast Index** — enrichment (title, description, categories, ratings).
+
+Integrations that need credentials skip gracefully (log a warning, contribute no data) when
+unset, rather than failing the ingestion task:
 
 | Integration | Env vars |
 |---|---|
 | Podcast Index enrichment | `PODCASTINDEX_API_KEY`, `PODCASTINDEX_API_SECRET` |
 | Podchaser chart scraping | `PODCHASER_CLIENT_ID`, `PODCHASER_CLIENT_SECRET` (OAuth2 client-credentials) |
+
+Apple Podcasts (iTunes Search) and Spotify charts are both keyless — no credentials needed.
+
+### Publishing frequency
+
+`podcasts.release_frequency_days` is not fetched from any source — none of Apple, Podcast
+Index, or Podchaser publish it. It's derived after every episode sync
+(`app/services/ingest.py::sync_episodes`): the median number of days between the podcast's
+most recent dated episodes, or `NULL` with fewer than two to compare.
 
 ## API
 

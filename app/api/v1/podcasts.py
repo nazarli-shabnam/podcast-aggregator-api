@@ -91,6 +91,7 @@ async def get_podcast(
         description=podcast.description,
         rss_feed_url=podcast.rss_feed_url,
         external_ids=podcast.external_ids,
+        release_frequency_days=podcast.release_frequency_days,
         episodes=CursorPage[EpisodeRead](
             items=[EpisodeRead.model_validate(ep) for ep in episodes],
             next_cursor=next_cursor,

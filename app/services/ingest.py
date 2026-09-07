@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import asdict
-from datetime import date
+from datetime import date, datetime
+from statistics import median
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
-from app.db.models import ChartSnapshot, Podcast
+from app.db.models import ChartSnapshot, Episode, Podcast
 from app.db.upsert import upsert_episodes, upsert_podcast
 from app.schemas.common import ChartSource
 from app.services.charts import get_scraper
@@ -160,14 +161,38 @@ async def enrich_podcast(
     return changed
 
 
+async def _compute_release_frequency_days(
+    session: AsyncSession, podcast_id: uuid.UUID, sample_size: int = 10
+) -> float | None:
+    """Median days between the most recent dated episodes, or None with
+    fewer than 2 to compare. No enrichment source publishes this value
+    directly - it's derived from the episode history we already have.
+    """
+    stmt = (
+        select(Episode.published_at)
+        .where(Episode.podcast_id == podcast_id, Episode.published_at.is_not(None))
+        .order_by(Episode.published_at.desc())
+        .limit(sample_size)
+    )
+    dates: list[datetime] = [row[0] for row in (await session.execute(stmt)).all()]
+    if len(dates) < 2:
+        return None
+    gaps = [(dates[i] - dates[i + 1]).total_seconds() / 86400.0 for i in range(len(dates) - 1)]
+    return float(median(gaps))
+
+
 async def sync_episodes(session: AsyncSession, podcast_id: uuid.UUID) -> int:
-    """Fetch the podcast feed and UPSERT its episodes. Returns rows submitted."""
+    """Fetch the podcast feed, UPSERT its episodes, and refresh the
+    podcast's derived release_frequency_days. Returns rows submitted.
+    """
     podcast = await session.get(Podcast, podcast_id)
     if podcast is None:
         logger.warning("sync_episodes: podcast %s not found", podcast_id)
         return 0
     episodes = await fetch_feed_episodes(podcast.rss_feed_url)
-    return await upsert_episodes(session, podcast_id, [asdict(ep) for ep in episodes])
+    submitted = await upsert_episodes(session, podcast_id, [asdict(ep) for ep in episodes])
+    podcast.release_frequency_days = await _compute_release_frequency_days(session, podcast_id)
+    return submitted
 
 
 async def list_tracked_podcast_ids(session: AsyncSession, limit: int = 500) -> list[uuid.UUID]:
