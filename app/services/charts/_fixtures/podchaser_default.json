@@ -1,0 +1,28 @@
+{
+  "entries": [
+    {
+      "rank": 1,
+      "title": "Founders & Funders",
+      "publisher": "Startup Studio",
+      "rss_feed_url": "https://feeds.example.com/founders-and-funders",
+      "image_url": "https://img.example.com/founders-and-funders.jpg",
+      "external_ids": {"podchaser": "pdc_show_100"}
+    },
+    {
+      "rank": 2,
+      "title": "The Daily Tech Brief",
+      "publisher": "Aggregator Media",
+      "rss_feed_url": "https://feeds.example.com/daily-tech-brief",
+      "image_url": "https://img.example.com/daily-tech-brief.jpg",
+      "external_ids": {"podchaser": "pdc_show_101"}
+    },
+    {
+      "rank": 3,
+      "title": "Deep Work Weekly",
+      "publisher": "Focus Labs",
+      "rss_feed_url": "https://feeds.example.com/deep-work-weekly",
+      "image_url": "https://img.example.com/deep-work-weekly.jpg",
+      "external_ids": {"podchaser": "pdc_show_102"}
+    }
+  ]
+}
