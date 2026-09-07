@@ -4,14 +4,19 @@ from __future__ import annotations
 
 from datetime import datetime
 from email.utils import parsedate_to_datetime
+from urllib.parse import urljoin
 
 from defusedxml import ElementTree as ET
 
 from app.core.logging import get_logger
 from app.services.dto import EpisodeDTO
+from app.services.exceptions import ConfigError
 from app.services.http import build_client, request_with_retry
+from app.services.url_safety import ensure_safe_url
 
 logger = get_logger(__name__)
+
+_MAX_REDIRECTS = 5
 
 _ITUNES = "{http://www.itunes.com/dtds/podcast-1.0.dtd}"
 
@@ -71,7 +76,23 @@ def parse_feed(xml_text: str) -> list[EpisodeDTO]:
 
 
 async def fetch_feed_episodes(rss_feed_url: str) -> list[EpisodeDTO]:
-    async with build_client() as client:
-        resp = await request_with_retry(client, "GET", rss_feed_url)
-        resp.raise_for_status()
-        return parse_feed(resp.text)
+    """Fetch and parse a podcast RSS feed.
+
+    Both the initial URL and every redirect hop are validated against
+    :func:`ensure_safe_url` (public http/https hosts only) - redirects are
+    followed manually, one hop at a time, so a feed can't bounce the
+    request to an internal address after the initial check passes.
+    """
+    url = ensure_safe_url(rss_feed_url)
+    async with build_client(follow_redirects=False) as client:
+        for _ in range(_MAX_REDIRECTS + 1):
+            resp = await request_with_retry(client, "GET", url)
+            if resp.is_redirect:
+                location = resp.headers.get("location")
+                if not location:
+                    raise ConfigError(f"redirect from {url!r} missing Location header")
+                url = ensure_safe_url(urljoin(url, location))
+                continue
+            resp.raise_for_status()
+            return parse_feed(resp.text)
+    raise ConfigError(f"too many redirects fetching feed {rss_feed_url!r}")

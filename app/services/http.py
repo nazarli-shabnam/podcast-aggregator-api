@@ -47,14 +47,17 @@ _default_limiter = RateLimiter(settings.http_rate_limit_per_second)
 
 @asynccontextmanager
 async def build_client(
-    *, base_url: str = "", headers: dict[str, str] | None = None
+    *,
+    base_url: str = "",
+    headers: dict[str, str] | None = None,
+    follow_redirects: bool = True,
 ) -> AsyncIterator[httpx.AsyncClient]:
     timeout = httpx.Timeout(settings.http_timeout_seconds)
     async with httpx.AsyncClient(
         base_url=base_url,
         headers=headers or {},
         timeout=timeout,
-        follow_redirects=True,
+        follow_redirects=follow_redirects,
     ) as client:
         yield client
 
