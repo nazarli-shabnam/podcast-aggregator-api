@@ -22,6 +22,9 @@ TEST_DATABASE_URL = os.environ.get(
     ),
 )
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
+os.environ.setdefault("API_KEYS", "test-key")
+
+TEST_API_KEY = os.environ["API_KEYS"].split(",")[0].strip()
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -66,6 +69,10 @@ async def client(db_session: AsyncSession) -> AsyncIterator[AsyncClient]:
 
     app.dependency_overrides[get_session] = _override
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"X-API-Key": TEST_API_KEY},
+    ) as ac:
         yield ac
     app.dependency_overrides.clear()
