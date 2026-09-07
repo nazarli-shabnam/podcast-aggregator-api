@@ -58,7 +58,7 @@ async def test_enrich_podcast_merges_metadata(db_session) -> None:
 
 
 async def test_enrich_podcast_handles_config_error(db_session) -> None:
-    ids = await ingest_chart(db_session, ChartSource.PODCHASER, "us", "technology")
+    ids = await ingest_chart(db_session, ChartSource.SPOTIFY, "us", "technology")
 
     class _Broken:
         name = "broken"

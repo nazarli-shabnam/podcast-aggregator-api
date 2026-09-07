@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     podcastindex_api_key: str | None = None
     podcastindex_api_secret: str | None = None
 
+    # Podchaser API uses OAuth2 client-credentials: exchange these for a
+    # bearer token, then query the GraphQL API. https://api-docs.podchaser.com
+    podchaser_client_id: str | None = None
+    podchaser_client_secret: str | None = None
+
     # HTTP client tuning
     http_timeout_seconds: float = 15.0
     http_max_retries: int = 3
