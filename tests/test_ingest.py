@@ -92,6 +92,79 @@ async def test_ingest_chart_empty_source_returns_nothing(db_session, monkeypatch
     assert await ingest_chart(db_session, ChartSource.SPOTIFY, "zz", "none") == []
 
 
+def _stub_scraper(source: ChartSource, entries):
+    from app.services.dto import ChartEntryDTO  # noqa: F401 - type hint clarity only
+
+    class _Stub:
+        def __init__(self) -> None:
+            self.source = source
+
+        async def fetch(self, country: str, category: str):
+            return entries
+
+    return _Stub()
+
+
+async def test_ingest_chart_persists_podchaser_ratings(db_session, monkeypatch) -> None:
+    from app.services.dto import ChartEntryDTO
+
+    entry = ChartEntryDTO(
+        rank=1,
+        source=ChartSource.PODCHASER,
+        country="us",
+        category="technology",
+        title="Rated Show",
+        rss_feed_url="https://feeds.test/rated-show",
+        rating_average=4.6,
+        rating_count=812,
+    )
+    monkeypatch.setattr(
+        ingest_mod, "get_scraper", lambda _s: _stub_scraper(ChartSource.PODCHASER, [entry])
+    )
+    ids = await ingest_chart(db_session, ChartSource.PODCHASER, "us", "technology")
+
+    podcast = await db_session.get(Podcast, ids[0])
+    assert float(podcast.rating_average) == 4.6
+    assert podcast.rating_count == 812
+
+
+async def test_spotify_reingest_preserves_existing_ratings(db_session, monkeypatch) -> None:
+    from app.services.dto import ChartEntryDTO
+
+    feed = "https://feeds.test/shared-show"
+    rated = ChartEntryDTO(
+        rank=1,
+        source=ChartSource.PODCHASER,
+        country="us",
+        category="technology",
+        title="Shared Show",
+        rss_feed_url=feed,
+        rating_average=4.2,
+        rating_count=333,
+    )
+    monkeypatch.setattr(
+        ingest_mod, "get_scraper", lambda _s: _stub_scraper(ChartSource.PODCHASER, [rated])
+    )
+    await ingest_chart(db_session, ChartSource.PODCHASER, "us", "technology")
+
+    unrated = ChartEntryDTO(
+        rank=1,
+        source=ChartSource.SPOTIFY,
+        country="us",
+        category="technology",
+        title="Shared Show",
+        rss_feed_url=feed,
+    )
+    monkeypatch.setattr(
+        ingest_mod, "get_scraper", lambda _s: _stub_scraper(ChartSource.SPOTIFY, [unrated])
+    )
+    ids = await ingest_chart(db_session, ChartSource.SPOTIFY, "us", "technology")
+
+    podcast = await db_session.get(Podcast, ids[0])
+    assert float(podcast.rating_average) == 4.2
+    assert podcast.rating_count == 333
+
+
 async def test_enrich_podcast_merges_metadata(db_session, stub_spotify_scraper) -> None:
     ids = await ingest_chart(db_session, ChartSource.SPOTIFY, "us", "technology")
     pid = ids[0]
