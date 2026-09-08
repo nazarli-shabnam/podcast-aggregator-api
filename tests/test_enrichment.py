@@ -4,8 +4,10 @@ import pytest
 
 from app.services.enrichment import apple as apple_mod
 from app.services.enrichment import podcastindex as pi_mod
+from app.services.enrichment import podchaser as pc_enrich_mod
 from app.services.enrichment.apple import AppleEnrichmentClient
 from app.services.enrichment.podcastindex import PodcastIndexEnrichmentClient
+from app.services.enrichment.podchaser import PodchaserEnrichmentClient
 from app.services.exceptions import ConfigError
 
 
@@ -177,12 +179,128 @@ def test_default_enrichment_clients_order() -> None:
     from app.services.enrichment import (
         AppleEnrichmentClient,
         PodcastIndexEnrichmentClient,
+        PodchaserEnrichmentClient,
         default_enrichment_clients,
     )
 
     clients = default_enrichment_clients()
     assert isinstance(clients[0], AppleEnrichmentClient)
     assert isinstance(clients[1], PodcastIndexEnrichmentClient)
+    assert isinstance(clients[2], PodchaserEnrichmentClient)
+
+
+def _pc_creds(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.core.config.settings.podchaser_client_id", "cid", raising=False)
+    monkeypatch.setattr("app.core.config.settings.podchaser_client_secret", "sec", raising=False)
+
+
+async def test_podchaser_enrichment_skips_without_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("app.core.config.settings.podchaser_client_id", None, raising=False)
+    monkeypatch.setattr("app.core.config.settings.podchaser_client_secret", None, raising=False)
+    with pytest.raises(ConfigError):
+        await PodchaserEnrichmentClient().enrich(title="x", rss_feed_url=None, external_ids={})
+
+
+async def test_podchaser_enrichment_maps_podcast_by_rss(monkeypatch: pytest.MonkeyPatch) -> None:
+    _pc_creds(monkeypatch)
+    responses = [
+        _FakeResp({"access_token": "tok"}),
+        _FakeResp(
+            {
+                "data": {
+                    "podcast": {
+                        "title": "Indie Waves",
+                        "description": "Indie music talk",
+                        "author": "Indie Media",
+                        "imageUrl": "https://img/iw.jpg",
+                        "rssUrl": "https://feeds.example.com/indie-waves",
+                        "ratingAverage": 4.8,
+                        "ratingCount": 2100,
+                        "categories": [{"text": "Music"}, {"text": "Arts"}],
+                    }
+                }
+            }
+        ),
+    ]
+
+    async def _fake(*a: object, **k: object) -> _FakeResp:
+        return responses.pop(0)
+
+    monkeypatch.setattr("app.services.podchaser_api.request_with_retry", _fake)
+    monkeypatch.setattr(pc_enrich_mod, "request_with_retry", _fake)
+
+    meta = await PodchaserEnrichmentClient().enrich(
+        title="Indie Waves",
+        rss_feed_url="https://feeds.example.com/indie-waves",
+        external_ids={},
+    )
+    assert meta is not None
+    assert meta.publisher == "Indie Media"
+    assert meta.rating_average == 4.8
+    assert meta.rating_count == 2100
+    assert set(meta.categories) == {"Music", "Arts"}
+
+
+async def test_podchaser_enrichment_returns_none_on_graphql_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _pc_creds(monkeypatch)
+    responses = [_FakeResp({"access_token": "tok"}), _FakeResp({"errors": [{"message": "nope"}]})]
+
+    async def _fake(*a: object, **k: object) -> _FakeResp:
+        return responses.pop(0)
+
+    monkeypatch.setattr("app.services.podchaser_api.request_with_retry", _fake)
+    monkeypatch.setattr(pc_enrich_mod, "request_with_retry", _fake)
+
+    meta = await PodchaserEnrichmentClient().enrich(
+        title="x", rss_feed_url="https://feeds.example.com/x", external_ids={}
+    )
+    assert meta is None
+
+
+async def test_podchaser_enrichment_returns_none_when_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _pc_creds(monkeypatch)
+    responses = [_FakeResp({"access_token": "tok"}), _FakeResp({"data": {"podcast": None}})]
+
+    async def _fake(*a: object, **k: object) -> _FakeResp:
+        return responses.pop(0)
+
+    monkeypatch.setattr("app.services.podchaser_api.request_with_retry", _fake)
+    monkeypatch.setattr(pc_enrich_mod, "request_with_retry", _fake)
+
+    meta = await PodchaserEnrichmentClient().enrich(
+        title="x", rss_feed_url="https://feeds.example.com/missing", external_ids={}
+    )
+    assert meta is None
+
+
+async def test_podchaser_enrichment_title_search_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    _pc_creds(monkeypatch)
+    seen: list[str] = []
+    responses = [
+        _FakeResp({"access_token": "tok"}),
+        _FakeResp(
+            {"data": {"podcasts": {"data": [{"title": "Found", "rssUrl": "https://feeds/found"}]}}}
+        ),
+    ]
+
+    async def _fake(client, method, url, **kwargs):  # noqa: ANN001
+        seen.append(kwargs.get("json", {}).get("query", ""))
+        return responses.pop(0)
+
+    monkeypatch.setattr("app.services.podchaser_api.request_with_retry", _fake)
+    monkeypatch.setattr(pc_enrich_mod, "request_with_retry", _fake)
+
+    meta = await PodchaserEnrichmentClient().enrich(
+        title="Found", rss_feed_url=None, external_ids={}
+    )
+    assert meta is not None and meta.title == "Found"
+    assert any("podcasts(" in q for q in seen)
 
 
 async def test_apple_enrich_falls_back_to_first_result_when_no_feed_url_matches(

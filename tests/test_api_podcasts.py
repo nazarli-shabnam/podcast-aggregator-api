@@ -43,6 +43,34 @@ async def test_list_podcasts_pagination_and_search(client, db_session) -> None:
     assert body["items"][0]["title"] == "Cursor Test Show"
 
 
+async def test_list_podcasts_category_filter(client, db_session) -> None:
+    await upsert_podcast(
+        db_session,
+        {
+            "title": "Tech Weekly",
+            "rss_feed_url": "https://feeds.test/tech-weekly",
+            "categories": ["Technology", "News"],
+        },
+    )
+    await upsert_podcast(
+        db_session,
+        {
+            "title": "Cooking Hour",
+            "rss_feed_url": "https://feeds.test/cooking-hour",
+            "categories": ["Food"],
+        },
+    )
+    await db_session.commit()
+
+    resp = await client.get("/api/v1/podcasts", params={"category": "News"})
+    assert resp.status_code == 200
+    titles = [i["title"] for i in resp.json()["items"]]
+    assert titles == ["Tech Weekly"]
+
+    # JSONB containment is case-sensitive
+    assert (await client.get("/api/v1/podcasts", params={"category": "news"})).json()["items"] == []
+
+
 async def test_podcast_detail_cursor_pagination(client, db_session) -> None:
     pid = await _seed_podcast_with_episodes(db_session, count=5)
 
