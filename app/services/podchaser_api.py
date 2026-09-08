@@ -12,14 +12,28 @@ of writing; if their schema changes, adjust the queries and mappers accordingly.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from app.core.config import settings
 from app.services.exceptions import ConfigError
 from app.services.http import build_client, request_with_retry
 
-TOKEN_URL = "https://api.podchaser.com/token"
+TOKEN_URL = "https://api.podchaser.com/token"  # noqa: S105 - OAuth endpoint URL, not a secret
 GRAPHQL_URL = "https://api.podchaser.com/graphql"
+
+# Podchaser access tokens are long-lived (weeks). Caching the token in-process
+# avoids a full client-credentials exchange on every chart scrape and every
+# enrichment call. Refreshed once it is within _TOKEN_SKEW_SECONDS of expiry.
+_TOKEN_SKEW_SECONDS = 300
+_DEFAULT_TOKEN_TTL_SECONDS = 3600
+_token_cache: dict[str, Any] = {"value": None, "expires_at": 0.0}
+
+
+def reset_token_cache() -> None:
+    """Drop the cached access token (tests, or after a credential change)."""
+    _token_cache["value"] = None
+    _token_cache["expires_at"] = 0.0
 
 
 def coerce_number[T: (int, float)](value: Any, cast: type[T]) -> T | None:
@@ -34,12 +48,19 @@ def coerce_number[T: (int, float)](value: Any, cast: type[T]) -> T | None:
 
 
 async def fetch_access_token() -> str:
-    """OAuth2 client-credentials token. Raises :class:`ConfigError` when the
-    ``PODCHASER_CLIENT_*`` settings are unset so callers can skip gracefully."""
+    """OAuth2 client-credentials token, cached in-process until near expiry.
+
+    Raises :class:`ConfigError` when the ``PODCHASER_CLIENT_*`` settings are
+    unset so callers can skip gracefully.
+    """
     client_id = settings.podchaser_client_id
     client_secret = settings.podchaser_client_secret
     if not client_id or not client_secret:
         raise ConfigError("PODCHASER_CLIENT_ID / PODCHASER_CLIENT_SECRET not configured")
+
+    cached = _token_cache["value"]
+    if cached is not None and time.monotonic() < _token_cache["expires_at"]:
+        return str(cached)
 
     async with build_client() as client:
         resp = await request_with_retry(
@@ -53,7 +74,12 @@ async def fetch_access_token() -> str:
             },
         )
         resp.raise_for_status()
-        token = resp.json().get("access_token")
+        body = resp.json()
+    token = body.get("access_token")
     if not token:
         raise ConfigError("Podchaser token endpoint returned no access_token")
+
+    ttl = coerce_number(body.get("expires_in"), int) or _DEFAULT_TOKEN_TTL_SECONDS
+    _token_cache["value"] = str(token)
+    _token_cache["expires_at"] = time.monotonic() + max(ttl - _TOKEN_SKEW_SECONDS, 0)
     return str(token)

@@ -27,12 +27,21 @@ class Settings(BaseSettings):
 
     chart_countries: _CsvList = Field(default_factory=lambda: ["us"])
     chart_categories: _CsvList = Field(default_factory=lambda: ["technology"])
+    # Optional per-category overrides for the Spotify charts URL slug, for
+    # genres whose slug isn't just the lower-cased name with spaces hyphenated
+    # (the default derivation - see app.services.charts.spotify). Format:
+    # "society & culture=society-culture,kids & family=kids-family".
+    spotify_category_slugs: Annotated[dict[str, str], NoDecode] = Field(default_factory=dict)
 
     # API auth + rate-limiting. An empty api_keys list means no key
     # satisfies auth - set at least one to use the API.
     api_keys: _CsvList = Field(default_factory=list)
     rate_limit_requests: int = 60
     rate_limit_window_seconds: int = 60
+    # Failed-auth attempts allowed per client IP per window before the API
+    # answers 429 instead of 401 (blunts credential-stuffing / bogus-key floods
+    # that would otherwise never touch the per-key limiter).
+    auth_failure_limit: int = 20
 
     podcastindex_api_key: str | None = None
     podcastindex_api_secret: str | None = None
@@ -52,6 +61,14 @@ class Settings(BaseSettings):
     def _split_csv(cls, value: object) -> object:
         if isinstance(value, str):
             return [item.strip() for item in value.split(",") if item.strip()]
+        return value
+
+    @field_validator("spotify_category_slugs", mode="before")
+    @classmethod
+    def _split_csv_map(cls, value: object) -> object:
+        if isinstance(value, str):
+            pairs = (item.split("=", 1) for item in value.split(",") if "=" in item)
+            return {k.strip().lower(): v.strip() for k, v in pairs if k.strip() and v.strip()}
         return value
 
     @property

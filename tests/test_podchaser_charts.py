@@ -181,7 +181,6 @@ async def test_fetch_skips_entries_missing_rss_or_title(monkeypatch: pytest.Monk
 def test_map_entry_tolerates_missing_or_bad_rating() -> None:
     no_rating = _map_entry(
         {"rank": 1, "podcast": {"title": "No Rating", "rssUrl": "https://x/y"}},
-        "us",
         "technology",
     )
     assert no_rating is not None
@@ -198,7 +197,6 @@ def test_map_entry_tolerates_missing_or_bad_rating() -> None:
                 "ratingCount": "n/a",
             },
         },
-        "us",
         "technology",
     )
     assert bad_rating is not None
@@ -207,8 +205,8 @@ def test_map_entry_tolerates_missing_or_bad_rating() -> None:
 
 
 def test_map_entry_rejects_non_dict_entry() -> None:
-    assert _map_entry("not a dict", "us", "technology") is None  # type: ignore[arg-type]
+    assert _map_entry("not a dict", "technology") is None  # type: ignore[arg-type]
 
 
 def test_map_entry_rejects_non_dict_podcast() -> None:
-    assert _map_entry({"rank": 1, "podcast": "not a dict"}, "us", "technology") is None
+    assert _map_entry({"rank": 1, "podcast": "not a dict"}, "technology") is None

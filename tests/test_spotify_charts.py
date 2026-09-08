@@ -111,6 +111,25 @@ async def test_fetch_uses_top_podcasts_slug_by_default(monkeypatch: pytest.Monke
     assert seen_urls == ["https://podcastcharts.byspotify.com/api/charts/top-podcasts"]
 
 
+def test_category_slug_derivation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(spotify_mod.settings, "spotify_category_slugs", {}, raising=False)
+    assert spotify_mod._category_slug("") == "top-podcasts"
+    assert spotify_mod._category_slug("Technology") == "technology"
+    assert spotify_mod._category_slug("True Crime") == "true-crime"
+    assert spotify_mod._category_slug("Society & Culture") == "society-culture"
+    assert spotify_mod._category_slug("Health & Fitness") == "health-fitness"
+
+
+def test_category_slug_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        spotify_mod.settings,
+        "spotify_category_slugs",
+        {"kids & family": "kids-family-custom"},
+        raising=False,
+    )
+    assert spotify_mod._category_slug("Kids & Family") == "kids-family-custom"
+
+
 async def test_feed_resolution_failure_is_caught_and_logged(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

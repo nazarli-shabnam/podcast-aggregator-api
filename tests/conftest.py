@@ -42,6 +42,27 @@ def _migrate() -> None:
     command.upgrade(cfg, "head")
 
 
+@pytest.fixture(autouse=True)
+def _reset_podchaser_token_cache() -> None:
+    """The Podchaser access token is cached in-process; clear it between tests
+    so each test's mocked token exchange runs deterministically."""
+    from app.services.podchaser_api import reset_token_cache
+
+    reset_token_cache()
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _clear_auth_failure_counters() -> AsyncIterator[None]:
+    """The per-IP failed-auth counter (app/api/deps.py) is keyed on a constant
+    client IP under ASGITransport, so clear it between tests to keep the 401
+    vs 429 boundary deterministic."""
+    from app.core.redis import redis_client
+
+    yield
+    async for key in redis_client.scan_iter(match="authfail:*"):
+        await redis_client.delete(key)
+
+
 @pytest_asyncio.fixture
 async def db_session() -> AsyncIterator[AsyncSession]:
     engine = create_async_engine(TEST_DATABASE_URL)
@@ -76,7 +97,6 @@ def stub_spotify_scraper(monkeypatch: pytest.MonkeyPatch):
         ChartEntryDTO(
             rank=1,
             source=ChartSource.SPOTIFY,
-            country="us",
             category="technology",
             title="The Daily Tech Brief",
             rss_feed_url="https://feeds.test/daily-tech-brief",
@@ -85,7 +105,6 @@ def stub_spotify_scraper(monkeypatch: pytest.MonkeyPatch):
         ChartEntryDTO(
             rank=2,
             source=ChartSource.SPOTIFY,
-            country="us",
             category="technology",
             title="Founders & Funders",
             rss_feed_url="https://feeds.test/founders-and-funders",
@@ -94,7 +113,6 @@ def stub_spotify_scraper(monkeypatch: pytest.MonkeyPatch):
         ChartEntryDTO(
             rank=3,
             source=ChartSource.SPOTIFY,
-            country="us",
             category="technology",
             title="Signal & Noise",
             rss_feed_url="https://feeds.test/signal-and-noise",

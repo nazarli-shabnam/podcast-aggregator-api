@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
-from fastapi import Depends, HTTPException, Query
+from fastapi import Depends, HTTPException, Query, Request
 from fastapi.security import APIKeyHeader
 from redis.asyncio import Redis
 
@@ -34,21 +34,37 @@ _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
 async def require_api_key(
+    request: Request,
     api_key: str | None = Depends(_api_key_header),
     redis: Redis = Depends(get_redis),  # type: ignore[type-arg]
 ) -> str:
     """Validate ``X-API-Key`` and apply a per-key fixed-window rate limit.
 
     401 when the key is missing or not one of ``settings.api_keys`` (an
-    empty configured list means no key satisfies auth). Otherwise 429
-    with a ``Retry-After`` header once the key exceeds
-    ``settings.rate_limit_requests`` within the current window.
+    empty configured list means no key satisfies auth) - but a client IP
+    that trips the 401 more than ``settings.auth_failure_limit`` times in a
+    window gets 429 instead, so bogus-key floods don't sail past the
+    per-key limiter. Once authenticated, 429 with a ``Retry-After`` header
+    when the key exceeds ``settings.rate_limit_requests`` in the window.
     """
-    if not api_key or api_key not in settings.api_keys:
-        raise HTTPException(status_code=401, detail="missing or invalid API key")
-
     window = settings.rate_limit_window_seconds
     bucket = int(time.time()) // window
+
+    if not api_key or api_key not in settings.api_keys:
+        client_ip = request.client.host if request.client else "unknown"
+        fail_key = f"authfail:{client_ip}:{bucket}"
+        fails = await redis.incr(fail_key)
+        if fails == 1:
+            await redis.expire(fail_key, window)
+        if fails > settings.auth_failure_limit:
+            ttl = await redis.ttl(fail_key)
+            raise HTTPException(
+                status_code=429,
+                detail="too many failed authentication attempts",
+                headers={"Retry-After": str(ttl if ttl > 0 else window)},
+            )
+        raise HTTPException(status_code=401, detail="missing or invalid API key")
+
     redis_key = f"ratelimit:{api_key}:{bucket}"
 
     count = await redis.incr(redis_key)
