@@ -109,6 +109,24 @@ async def test_fetch_handles_graphql_errors(monkeypatch: pytest.MonkeyPatch) -> 
     assert await PodchaserChartScraper().fetch("us", "technology") == []
 
 
+async def test_fetch_clears_token_cache_on_graphql_auth_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 401 on the chart GraphQL call means the cached token is dead - it must
+    be dropped so the next scrape re-exchanges instead of replaying it to TTL."""
+    _set_credentials(monkeypatch)
+    _patch_request(
+        monkeypatch,
+        [
+            _FakeResp({"access_token": "tok123", "expires_in": 3600}),
+            _FakeResp({"message": "unauthorized"}, status=401),
+        ],
+    )
+
+    assert await PodchaserChartScraper().fetch("us", "technology") == []
+    assert podchaser_api._token_cache["value"] is None
+
+
 async def test_fetch_skips_entry_missing_rank_without_crashing_task(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -181,7 +199,6 @@ async def test_fetch_skips_entries_missing_rss_or_title(monkeypatch: pytest.Monk
 def test_map_entry_tolerates_missing_or_bad_rating() -> None:
     no_rating = _map_entry(
         {"rank": 1, "podcast": {"title": "No Rating", "rssUrl": "https://x/y"}},
-        "us",
         "technology",
     )
     assert no_rating is not None
@@ -198,7 +215,6 @@ def test_map_entry_tolerates_missing_or_bad_rating() -> None:
                 "ratingCount": "n/a",
             },
         },
-        "us",
         "technology",
     )
     assert bad_rating is not None
@@ -207,8 +223,8 @@ def test_map_entry_tolerates_missing_or_bad_rating() -> None:
 
 
 def test_map_entry_rejects_non_dict_entry() -> None:
-    assert _map_entry("not a dict", "us", "technology") is None  # type: ignore[arg-type]
+    assert _map_entry("not a dict", "technology") is None  # type: ignore[arg-type]
 
 
 def test_map_entry_rejects_non_dict_podcast() -> None:
-    assert _map_entry({"rank": 1, "podcast": "not a dict"}, "us", "technology") is None
+    assert _map_entry({"rank": 1, "podcast": "not a dict"}, "technology") is None

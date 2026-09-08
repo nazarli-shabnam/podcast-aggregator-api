@@ -12,8 +12,9 @@ from app.services.exceptions import ConfigError
 
 
 class _FakeResp:
-    def __init__(self, payload: dict) -> None:
+    def __init__(self, payload: dict, status_code: int = 200) -> None:
         self._payload = payload
+        self.status_code = status_code
 
     def raise_for_status(self) -> None:  # noqa: D401
         return None
@@ -50,6 +51,67 @@ async def test_apple_enrich_maps_search_result(monkeypatch: pytest.MonkeyPatch) 
     assert meta.publisher == "Aggregator Media"
     assert meta.categories == ["Technology"]
     assert meta.external_ids == {"apple": "42"}
+
+
+async def test_apple_enrich_maps_ratings(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = {
+        "results": [
+            {
+                "collectionName": "Rated Show",
+                "feedUrl": "https://feeds.example.com/rated",
+                "collectionId": 7,
+                "averageUserRating": 4.7,
+                "userRatingCount": 1234,
+            }
+        ]
+    }
+
+    async def _fake_request(*a: object, **k: object) -> _FakeResp:
+        return _FakeResp(payload)
+
+    monkeypatch.setattr(apple_mod, "request_with_retry", _fake_request)
+    meta = await AppleEnrichmentClient().enrich(
+        title="Rated Show", rss_feed_url="https://feeds.example.com/rated", external_ids={}
+    )
+    assert meta is not None
+    assert meta.rating_average == 4.7
+    assert meta.rating_count == 1234
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        pytest.param({"userRatingCount": 0}, id="count-only-no-avg"),
+        pytest.param({"averageUserRating": 0, "userRatingCount": 0}, id="explicit-zero-avg"),
+        pytest.param({"averageUserRating": 0.0, "userRatingCount": 812}, id="zero-avg-real-count"),
+    ],
+)
+async def test_apple_enrich_omits_rating_when_average_absent_or_zero(
+    monkeypatch: pytest.MonkeyPatch, extra: dict[str, object]
+) -> None:
+    """iTunes returns averageUserRating 0 (or omits it) for a show with no
+    ratings in the queried storefront. Neither shape may surface a rating - it
+    would clobber a real rating from another source downstream."""
+    payload = {
+        "results": [
+            {
+                "collectionName": "Unrated Show",
+                "feedUrl": "https://feeds.example.com/unrated",
+                **extra,
+            }
+        ]
+    }
+
+    async def _fake_request(*a: object, **k: object) -> _FakeResp:
+        return _FakeResp(payload)
+
+    monkeypatch.setattr(apple_mod, "request_with_retry", _fake_request)
+    meta = await AppleEnrichmentClient().enrich(
+        title="Unrated Show", rss_feed_url="https://feeds.example.com/unrated", external_ids={}
+    )
+    assert meta is not None
+    assert meta.rating_average is None
+    assert meta.rating_count is None
 
 
 async def test_apple_enrich_by_id_and_no_results(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -301,6 +363,68 @@ async def test_podchaser_enrichment_title_search_fallback(monkeypatch: pytest.Mo
     )
     assert meta is not None and meta.title == "Found"
     assert any("podcasts(" in q for q in seen)
+
+
+async def test_podchaser_access_token_is_cached_across_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _pc_creds(monkeypatch)
+    from app.services import podchaser_api
+
+    calls = 0
+
+    async def _fake_token_request(*a: object, **k: object) -> _FakeResp:
+        nonlocal calls
+        calls += 1
+        return _FakeResp({"access_token": "tok", "expires_in": 3600})
+
+    monkeypatch.setattr(podchaser_api, "request_with_retry", _fake_token_request)
+
+    assert await podchaser_api.fetch_access_token() == "tok"
+    assert await podchaser_api.fetch_access_token() == "tok"
+    assert calls == 1  # second call served from the in-process cache
+
+
+async def test_podchaser_enrichment_clears_token_cache_on_graphql_auth_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 401/403 on the GraphQL call means the cached token is dead. It must be
+    dropped so the next run re-exchanges instead of replaying it until TTL."""
+    _pc_creds(monkeypatch)
+    from app.services import podchaser_api
+
+    responses = [
+        _FakeResp({"access_token": "tok", "expires_in": 3600}),
+        _FakeResp({"message": "unauthorized"}, status_code=401),
+    ]
+
+    async def _fake(*a: object, **k: object) -> _FakeResp:
+        return responses.pop(0)
+
+    monkeypatch.setattr("app.services.podchaser_api.request_with_retry", _fake)
+    monkeypatch.setattr(pc_enrich_mod, "request_with_retry", _fake)
+
+    meta = await PodchaserEnrichmentClient().enrich(
+        title="x", rss_feed_url="https://feeds.example.com/x", external_ids={}
+    )
+    assert meta is None
+    assert podchaser_api._token_cache["value"] is None  # cache was cleared
+
+
+async def test_fetch_access_token_raises_configerror_on_rejected_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _pc_creds(monkeypatch)
+    from app.services import podchaser_api
+
+    async def _fake(*a: object, **k: object) -> _FakeResp:
+        return _FakeResp({"error": "invalid_client"}, status_code=401)
+
+    monkeypatch.setattr(podchaser_api, "request_with_retry", _fake)
+
+    with pytest.raises(ConfigError):
+        await podchaser_api.fetch_access_token()
+    assert podchaser_api._token_cache["value"] is None
 
 
 async def test_apple_enrich_falls_back_to_first_result_when_no_feed_url_matches(

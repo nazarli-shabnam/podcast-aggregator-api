@@ -19,7 +19,12 @@ from app.schemas.common import ChartSource
 from app.services.dto import ChartEntryDTO
 from app.services.exceptions import ConfigError
 from app.services.http import build_client, request_with_retry
-from app.services.podchaser_api import GRAPHQL_URL, coerce_number, fetch_access_token
+from app.services.podchaser_api import (
+    GRAPHQL_URL,
+    coerce_number,
+    fetch_access_token,
+    reset_token_cache,
+)
 
 logger = get_logger(__name__)
 
@@ -44,7 +49,7 @@ query TopCharts($country: String!, $category: String!, $first: Int!) {
 """
 
 
-def _map_entry(rank_entry: dict[str, Any], country: str, category: str) -> ChartEntryDTO | None:
+def _map_entry(rank_entry: dict[str, Any], category: str) -> ChartEntryDTO | None:
     """Map one ``topCharts`` entry to a DTO, or None if it's unusable.
 
     Malformed upstream data (a missing rank, title, or feed URL) skips
@@ -67,7 +72,6 @@ def _map_entry(rank_entry: dict[str, Any], country: str, category: str) -> Chart
     return ChartEntryDTO(
         rank=rank,
         source=ChartSource.PODCHASER,
-        country=country,
         category=category,
         title=title,
         rss_feed_url=rss_url,
@@ -99,6 +103,18 @@ class PodchaserChartScraper:
                     "variables": {"country": country.upper(), "category": category, "first": 50},
                 },
             )
+            if resp.status_code in (401, 403):
+                # The cached token was rejected (revoked / rotated). Clear it so
+                # the next run re-exchanges instead of replaying it until TTL.
+                reset_token_cache()
+                logger.error(
+                    "podchaser charts: auth rejected (HTTP %d) for %s/%s - cleared "
+                    "cached access token so the next run re-exchanges",
+                    resp.status_code,
+                    country,
+                    category,
+                )
+                return []
             resp.raise_for_status()
             payload = resp.json()
 
@@ -107,7 +123,7 @@ class PodchaserChartScraper:
             return []
 
         raw_entries = ((payload.get("data") or {}).get("topCharts") or {}).get("data") or []
-        entries = [e for e in (_map_entry(r, country, category) for r in raw_entries) if e]
+        entries = [e for e in (_map_entry(r, category) for r in raw_entries) if e]
         logger.info(
             "podchaser charts fetched country=%s category=%s entries=%d",
             country,

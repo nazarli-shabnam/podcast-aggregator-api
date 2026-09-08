@@ -18,8 +18,10 @@ skipped (logged), not treated as a scrape failure.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
+from app.core.config import settings
 from app.core.logging import get_logger
 from app.schemas.common import ChartSource
 from app.services.dto import ChartEntryDTO
@@ -30,6 +32,30 @@ logger = get_logger(__name__)
 
 _CHARTS_URL = "https://podcastcharts.byspotify.com/api/charts/{category}"
 _CHART_LIMIT = 50
+_SLUG_NONWORD = re.compile(r"[^a-z0-9]+")
+
+
+def _category_slug(category: str) -> str:
+    """Map a configured category to Spotify's chart URL slug.
+
+    Spotify uses hyphenated slugs (``true-crime``, ``society-culture``). By
+    default we lower-case, drop ``&``/``and`` and collapse any run of
+    non-alphanumerics to a single hyphen; ``settings.spotify_category_slugs``
+    can override individual categories that don't follow that rule.
+
+    A blank / ``top-podcasts`` category maps to the overall chart. Any *other*
+    category that has no alphanumerics left after slugification (punctuation- or
+    non-ASCII-only) returns ``""`` - the caller must treat that as an
+    unresolvable category and fail loudly rather than silently scraping the
+    overall chart under the wrong label.
+    """
+    key = category.strip().lower()
+    if not key or key == "top-podcasts":
+        return "top-podcasts"
+    if key in settings.spotify_category_slugs:
+        return settings.spotify_category_slugs[key]
+    without_and = re.sub(r"\band\b|&", " ", key)
+    return _SLUG_NONWORD.sub("-", without_and).strip("-")
 
 
 async def _resolve_feed_url(show_name: str, publisher: str | None) -> str | None:
@@ -58,7 +84,18 @@ class SpotifyChartScraper:
     source = ChartSource.SPOTIFY
 
     async def fetch(self, country: str, category: str) -> list[ChartEntryDTO]:
-        slug = "top-podcasts" if category.lower() in ("", "top-podcasts") else category.lower()
+        slug = _category_slug(category)
+        if not slug:
+            # A non-blank category that slugified to nothing (punctuation- or
+            # non-ASCII-only). Scraping "top-podcasts" here would silently ingest
+            # the overall chart tagged with this category - fail loudly instead.
+            logger.error(
+                "spotify charts: category %r has no usable slug; set "
+                "SPOTIFY_CATEGORY_SLUGS['%s'] to its Spotify chart slug",
+                category,
+                category.strip().lower(),
+            )
+            return []
         async with build_client() as client:
             resp = await request_with_retry(
                 client,
@@ -70,7 +107,15 @@ class SpotifyChartScraper:
             raw_items = resp.json()
 
         if not isinstance(raw_items, list):
-            logger.warning("spotify charts: unexpected response shape for %s/%s", country, slug)
+            # Most often an unknown genre slug - Spotify answers with a
+            # non-list body. ERROR so a mis-configured CHART_CATEGORIES entry
+            # isn't lost in warning noise.
+            logger.error(
+                "spotify charts: unexpected response shape for region=%s slug=%s "
+                "(check the category slug / SPOTIFY_CATEGORY_SLUGS)",
+                country,
+                slug,
+            )
             return []
 
         entries: list[ChartEntryDTO] = []
@@ -91,7 +136,6 @@ class SpotifyChartScraper:
                 ChartEntryDTO(
                     rank=rank,
                     source=self.source,
-                    country=country,
                     category=category,
                     title=show_name,
                     rss_feed_url=feed_url,

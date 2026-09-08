@@ -16,8 +16,8 @@ async def test_health_degraded_when_db_down(client, monkeypatch) -> None:
 
     monkeypatch.setattr(main_mod, "engine", _BrokenEngine())
     resp = await client.get("/health")
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "degraded"
+    assert resp.status_code == 503
+    assert resp.json() == {"status": "degraded", "database": "error"}
 
 
 async def test_openapi_schema_lists_routes(client) -> None:

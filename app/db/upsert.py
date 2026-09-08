@@ -10,6 +10,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.normalize import normalize_categories
 from app.db.models import Episode, Podcast
 
 # ``categories`` is merged (union, de-duplicated) rather than overwritten - see
@@ -33,8 +34,13 @@ def _categories_union(insert_stmt: Any) -> Any:
     """
     combined = Podcast.categories.op("||")(insert_stmt.excluded.categories)
     element = func.jsonb_array_elements_text(combined).column_valued("value")
+    # Fold to the same canonical form callers use (app.core.normalize:
+    # normalize_category = " ".join(value.split()).lower()) so a pre-normalisation
+    # row already in the table still converges on re-ingest. Collapse internal
+    # whitespace *before* trimming the (now space-only) ends, mirroring str.split.
+    normalized = func.lower(func.btrim(func.regexp_replace(element, r"\s+", " ", "g")))
     return select(
-        func.coalesce(func.jsonb_agg(element.distinct()), cast([], JSONB))
+        func.coalesce(func.jsonb_agg(normalized.distinct()), cast([], JSONB))
     ).scalar_subquery()
 
 
@@ -42,8 +48,12 @@ async def upsert_podcast(session: AsyncSession, values: dict[str, Any]) -> uuid.
     """Insert or update a podcast keyed by ``rss_feed_url``; returns its id.
 
     ``external_ids`` and ``categories`` are merged (existing values preserved)
-    rather than replaced; every other column is overwritten.
+    rather than replaced; every other column is overwritten. ``categories`` are
+    canonicalised here (app.core.normalize) so every write path - chart ingest,
+    enrichment, tests - stores the same form.
     """
+    if "categories" in values:
+        values = {**values, "categories": normalize_categories(values["categories"])}
     insert_stmt = pg_insert(Podcast).values(**values)
     set_: dict[str, Any] = {
         col: insert_stmt.excluded[col] for col in _PODCAST_UPDATE_COLUMNS if col in values

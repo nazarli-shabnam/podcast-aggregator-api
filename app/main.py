@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response, status
 from sqlalchemy import text
 
 from app.api.v1.router import api_router
@@ -32,7 +32,7 @@ def create_app() -> FastAPI:
     app.include_router(api_router)
 
     @app.get("/health", tags=["meta"])
-    async def health() -> dict[str, str]:
+    async def health(response: Response) -> dict[str, str]:
         db_ok = "ok"
         try:
             async with engine.connect() as conn:
@@ -40,6 +40,10 @@ def create_app() -> FastAPI:
         except Exception as exc:  # noqa: BLE001 - report, don't crash
             logger.warning("health db check failed: %s", exc)
             db_ok = "error"
+        if db_ok != "ok":
+            # 503 so load balancers / probes keying on the status code mark
+            # the instance unhealthy, not just the JSON body.
+            response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         return {"status": "ok" if db_ok == "ok" else "degraded", "database": db_ok}
 
     return app

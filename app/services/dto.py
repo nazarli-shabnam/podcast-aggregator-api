@@ -10,9 +10,11 @@ from app.schemas.common import ChartSource
 
 @dataclass(slots=True)
 class ChartEntryDTO:
+    # ``category`` is carried through to podcasts.categories on ingest; the
+    # country is taken from the ingest call's own argument, so it is not a
+    # field here.
     rank: int
     source: ChartSource
-    country: str
     category: str
     title: str
     rss_feed_url: str
