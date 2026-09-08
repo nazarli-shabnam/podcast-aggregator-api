@@ -38,7 +38,8 @@ alembic/      async migration environment + versions
 
 ```bash
 docker compose up -d                 # postgres:15 + redis:7
-python -m venv .venv && source .venv/bin/activate
+python -m venv .venv
+source .venv/bin/activate            # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 cp .env.example .env
 

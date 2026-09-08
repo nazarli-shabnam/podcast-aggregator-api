@@ -135,3 +135,42 @@ async def test_fetch_feed_episodes_pins_to_resolved_ip(monkeypatch: pytest.Monke
     )
     await fetch_feed_episodes("https://feed.test/rss")
     assert seen_urls == ["https://93.184.216.34/rss"]
+
+
+async def test_fetch_feed_episodes_raises_on_redirect_missing_location(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(301)  # redirect status, no Location header
+
+    class _CM:
+        async def __aenter__(self):
+            return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(feeds_mod, "build_client", lambda **kw: _CM())
+    monkeypatch.setattr(feeds_mod, "resolve_safe_url", _fake_pin)
+    with pytest.raises(ConfigError, match="missing Location header"):
+        await fetch_feed_episodes("http://feed.test/old")
+
+
+async def test_fetch_feed_episodes_raises_after_too_many_redirects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        # Always redirect to itself - never terminates on its own.
+        return httpx.Response(301, headers={"location": "http://feed.test/old"})
+
+    class _CM:
+        async def __aenter__(self):
+            return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(feeds_mod, "build_client", lambda **kw: _CM())
+    monkeypatch.setattr(feeds_mod, "resolve_safe_url", _fake_pin)
+    with pytest.raises(ConfigError, match="too many redirects"):
+        await fetch_feed_episodes("http://feed.test/old")

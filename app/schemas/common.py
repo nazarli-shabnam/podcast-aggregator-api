@@ -25,7 +25,8 @@ class Page(BaseModel, Generic[T]):
 
     @property
     def pages(self) -> int:
-        return (self.total + self.page_size - 1) // self.page_size if self.page_size else 0
+        # page_size is validated >= 1 (Field(ge=1) above), so no zero-guard needed.
+        return (self.total + self.page_size - 1) // self.page_size
 
 
 class CursorPage(BaseModel, Generic[T]):

@@ -95,3 +95,118 @@ async def test_podcastindex_maps_feed(monkeypatch: pytest.MonkeyPatch) -> None:
     assert meta.publisher == "Focus Labs"
     assert meta.external_ids == {"podcastindex": "555"}
     assert set(meta.categories) == {"Technology", "Education"}
+
+
+def test_podcastindex_auth_headers_with_real_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("app.core.config.settings.podcastindex_api_key", "mykey", raising=False)
+    monkeypatch.setattr(
+        "app.core.config.settings.podcastindex_api_secret", "mysecret", raising=False
+    )
+    headers = pi_mod._auth_headers()
+    assert headers["X-Auth-Key"] == "mykey"
+    assert "X-Auth-Date" in headers
+    assert len(headers["Authorization"]) == 40  # sha1 hex digest length
+
+
+async def test_podcastindex_searches_by_term_without_feed_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pi_mod, "_auth_headers", lambda: {"X-Auth-Key": "k"})
+    seen_paths: list[str] = []
+
+    async def _fake(client, method, path, **kwargs):  # noqa: ANN001
+        seen_paths.append(path)
+        return _FakeResp({"feed": {"title": "Found It", "url": "https://feeds.test/found"}})
+
+    monkeypatch.setattr(pi_mod, "request_with_retry", _fake)
+    meta = await PodcastIndexEnrichmentClient().enrich(
+        title="Found It", rss_feed_url=None, external_ids={}
+    )
+    assert seen_paths == ["/search/byterm"]
+    assert meta is not None
+    assert meta.title == "Found It"
+
+
+async def test_podcastindex_takes_first_of_a_feed_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(pi_mod, "_auth_headers", lambda: {"X-Auth-Key": "k"})
+
+    async def _fake(*a: object, **k: object) -> _FakeResp:
+        return _FakeResp({"feed": [{"title": "First"}, {"title": "Second"}]})
+
+    monkeypatch.setattr(pi_mod, "request_with_retry", _fake)
+    meta = await PodcastIndexEnrichmentClient().enrich(
+        title="x", rss_feed_url="https://feeds.test/x", external_ids={}
+    )
+    assert meta is not None
+    assert meta.title == "First"
+
+
+async def test_podcastindex_returns_none_for_empty_feed_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pi_mod, "_auth_headers", lambda: {"X-Auth-Key": "k"})
+
+    async def _fake(*a: object, **k: object) -> _FakeResp:
+        return _FakeResp({"feed": []})
+
+    monkeypatch.setattr(pi_mod, "request_with_retry", _fake)
+    meta = await PodcastIndexEnrichmentClient().enrich(
+        title="x", rss_feed_url="https://feeds.test/x", external_ids={}
+    )
+    assert meta is None
+
+
+async def test_podcastindex_returns_none_when_feed_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pi_mod, "_auth_headers", lambda: {"X-Auth-Key": "k"})
+
+    async def _fake(*a: object, **k: object) -> _FakeResp:
+        return _FakeResp({})
+
+    monkeypatch.setattr(pi_mod, "request_with_retry", _fake)
+    meta = await PodcastIndexEnrichmentClient().enrich(
+        title="x", rss_feed_url="https://feeds.test/x", external_ids={}
+    )
+    assert meta is None
+
+
+def test_default_enrichment_clients_order() -> None:
+    from app.services.enrichment import (
+        AppleEnrichmentClient,
+        PodcastIndexEnrichmentClient,
+        default_enrichment_clients,
+    )
+
+    clients = default_enrichment_clients()
+    assert isinstance(clients[0], AppleEnrichmentClient)
+    assert isinstance(clients[1], PodcastIndexEnrichmentClient)
+
+
+async def test_apple_enrich_falls_back_to_first_result_when_no_feed_url_matches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = {
+        "results": [
+            {
+                "collectionName": "Some Other Show",
+                "feedUrl": "https://feeds.example.com/some-other-show",
+                "collectionId": 1,
+            }
+        ]
+    }
+
+    async def _fake_request(*args: object, **kwargs: object) -> _FakeResp:
+        return _FakeResp(payload)
+
+    monkeypatch.setattr(apple_mod, "request_with_retry", _fake_request)
+
+    meta = await AppleEnrichmentClient().enrich(
+        title="Some Other Show",
+        rss_feed_url="https://feeds.example.com/daily-tech-brief",  # no result matches this
+        external_ids={},
+    )
+    assert meta is not None
+    assert meta.rss_feed_url == "https://feeds.example.com/some-other-show"

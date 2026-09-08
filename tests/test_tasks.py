@@ -51,3 +51,18 @@ def test_scrape_task_ingests_and_enqueues_enrichment(monkeypatch: pytest.MonkeyP
     count = scraping.scrape_spotify_charts_task("us", "technology")
     assert count == 2
     assert len(enqueued) == 2
+
+
+def test_scrape_podchaser_charts_task_ingests(monkeypatch: pytest.MonkeyPatch) -> None:
+    import app.tasks.enrichment as enrichment_mod
+
+    monkeypatch.setattr(enrichment_mod.enrich_podcast_metadata_task, "delay", lambda pid: None)
+
+    async def _fake_ingest(session, source, country, category):  # noqa: ANN001
+        import uuid
+
+        return [uuid.uuid4()]
+
+    monkeypatch.setattr(scraping, "ingest_chart", _fake_ingest)
+
+    assert scraping.scrape_podchaser_charts_task("us", "technology") == 1

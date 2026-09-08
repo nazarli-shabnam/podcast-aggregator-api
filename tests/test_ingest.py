@@ -185,3 +185,21 @@ async def test_list_tracked_podcast_ids(db_session, stub_spotify_scraper) -> Non
     ids = await ingest_chart(db_session, ChartSource.SPOTIFY, "us", "technology")
     tracked = await list_tracked_podcast_ids(db_session)
     assert set(tracked) == set(ids)
+
+
+async def test_enrich_podcast_skips_client_returning_none(db_session, stub_spotify_scraper) -> None:
+    ids = await ingest_chart(db_session, ChartSource.SPOTIFY, "us", "technology")
+
+    class _NoMatch:
+        name = "no-match"
+
+        async def enrich(self, **_):
+            return None
+
+    assert await enrich_podcast(db_session, ids[0], clients=[_NoMatch()]) is False
+
+
+async def test_sync_episodes_missing_podcast_returns_zero(db_session) -> None:
+    import uuid
+
+    assert await sync_episodes(db_session, uuid.uuid4()) == 0

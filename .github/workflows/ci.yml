@@ -3,8 +3,10 @@ name: ci
 on:
   pull_request:
     branches: [main]
-  push:
-    branches-ignore: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -13,6 +15,7 @@ concurrency:
 jobs:
   ci:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     services:
       postgres:
