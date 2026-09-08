@@ -34,9 +34,11 @@ def _categories_union(insert_stmt: Any) -> Any:
     """
     combined = Podcast.categories.op("||")(insert_stmt.excluded.categories)
     element = func.jsonb_array_elements_text(combined).column_valued("value")
-    # Fold to the same canonical form callers use (app.core.normalize) so a
-    # pre-normalisation row already in the table still converges on re-ingest.
-    normalized = func.lower(func.btrim(element))
+    # Fold to the same canonical form callers use (app.core.normalize:
+    # normalize_category = " ".join(value.split()).lower()) so a pre-normalisation
+    # row already in the table still converges on re-ingest. Collapse internal
+    # whitespace *before* trimming the (now space-only) ends, mirroring str.split.
+    normalized = func.lower(func.btrim(func.regexp_replace(element, r"\s+", " ", "g")))
     return select(
         func.coalesce(func.jsonb_agg(normalized.distinct()), cast([], JSONB))
     ).scalar_subquery()

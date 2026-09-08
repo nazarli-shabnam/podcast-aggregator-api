@@ -16,7 +16,12 @@ from typing import Any
 from app.core.logging import get_logger
 from app.services.dto import PodcastMetadataDTO
 from app.services.http import build_client, request_with_retry
-from app.services.podchaser_api import GRAPHQL_URL, coerce_number, fetch_access_token
+from app.services.podchaser_api import (
+    GRAPHQL_URL,
+    coerce_number,
+    fetch_access_token,
+    reset_token_cache,
+)
 
 logger = get_logger(__name__)
 
@@ -86,6 +91,16 @@ class PodchaserEnrichmentClient:
             resp = await request_with_retry(
                 client, "POST", GRAPHQL_URL, json={"query": query, "variables": variables}
             )
+            if resp.status_code in (401, 403):
+                # Cached token rejected (revoked / rotated). Clear it so the next
+                # run re-exchanges instead of replaying it until TTL.
+                reset_token_cache()
+                logger.error(
+                    "podchaser enrichment: auth rejected (HTTP %d) - cleared cached "
+                    "access token so the next run re-exchanges",
+                    resp.status_code,
+                )
+                return None
             resp.raise_for_status()
             payload = resp.json()
 

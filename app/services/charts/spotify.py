@@ -42,6 +42,12 @@ def _category_slug(category: str) -> str:
     default we lower-case, drop ``&``/``and`` and collapse any run of
     non-alphanumerics to a single hyphen; ``settings.spotify_category_slugs``
     can override individual categories that don't follow that rule.
+
+    A blank / ``top-podcasts`` category maps to the overall chart. Any *other*
+    category that has no alphanumerics left after slugification (punctuation- or
+    non-ASCII-only) returns ``""`` - the caller must treat that as an
+    unresolvable category and fail loudly rather than silently scraping the
+    overall chart under the wrong label.
     """
     key = category.strip().lower()
     if not key or key == "top-podcasts":
@@ -49,7 +55,7 @@ def _category_slug(category: str) -> str:
     if key in settings.spotify_category_slugs:
         return settings.spotify_category_slugs[key]
     without_and = re.sub(r"\band\b|&", " ", key)
-    return _SLUG_NONWORD.sub("-", without_and).strip("-") or "top-podcasts"
+    return _SLUG_NONWORD.sub("-", without_and).strip("-")
 
 
 async def _resolve_feed_url(show_name: str, publisher: str | None) -> str | None:
@@ -79,6 +85,17 @@ class SpotifyChartScraper:
 
     async def fetch(self, country: str, category: str) -> list[ChartEntryDTO]:
         slug = _category_slug(category)
+        if not slug:
+            # A non-blank category that slugified to nothing (punctuation- or
+            # non-ASCII-only). Scraping "top-podcasts" here would silently ingest
+            # the overall chart tagged with this category - fail loudly instead.
+            logger.error(
+                "spotify charts: category %r has no usable slug; set "
+                "SPOTIFY_CATEGORY_SLUGS['%s'] to its Spotify chart slug",
+                category,
+                category.strip().lower(),
+            )
+            return []
         async with build_client() as client:
             resp = await request_with_retry(
                 client,

@@ -24,13 +24,20 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.execute("""
+    # Mirror app.core.normalize.normalize_category exactly:
+    # " ".join(value.split()).lower() == lower(btrim(regexp_replace(value, '\s+', ' ', 'g'))).
+    # Collapse internal whitespace *before* trimming so tab/newline-padded ends
+    # (which one-arg btrim() would leave) also fold to the canonical form.
+    op.execute(r"""
         UPDATE podcasts
         SET categories = COALESCE(
             (
-                SELECT jsonb_agg(DISTINCT lower(btrim(value)) ORDER BY lower(btrim(value)))
-                FROM jsonb_array_elements_text(categories) AS value
-                WHERE btrim(value) <> ''
+                SELECT jsonb_agg(DISTINCT norm ORDER BY norm)
+                FROM (
+                    SELECT lower(btrim(regexp_replace(value, '\s+', ' ', 'g'))) AS norm
+                    FROM jsonb_array_elements_text(categories) AS value
+                ) folded
+                WHERE norm <> ''
             ),
             '[]'::jsonb
         )

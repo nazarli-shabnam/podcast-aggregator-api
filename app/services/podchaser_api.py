@@ -73,6 +73,15 @@ async def fetch_access_token() -> str:
                 "client_secret": client_secret,
             },
         )
+        if resp.status_code in (401, 403):
+            # Bad / rotated client credentials. Drop any stale cache entry and
+            # surface it as ConfigError so callers skip Podchaser this run the
+            # same way they do when it is unconfigured, rather than raising a
+            # hard error the Celery layer no longer retries.
+            reset_token_cache()
+            raise ConfigError(
+                f"Podchaser rejected the client credentials (HTTP {resp.status_code})"
+            )
         resp.raise_for_status()
         body = resp.json()
     token = body.get("access_token")

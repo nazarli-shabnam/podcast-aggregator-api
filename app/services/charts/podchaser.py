@@ -19,7 +19,12 @@ from app.schemas.common import ChartSource
 from app.services.dto import ChartEntryDTO
 from app.services.exceptions import ConfigError
 from app.services.http import build_client, request_with_retry
-from app.services.podchaser_api import GRAPHQL_URL, coerce_number, fetch_access_token
+from app.services.podchaser_api import (
+    GRAPHQL_URL,
+    coerce_number,
+    fetch_access_token,
+    reset_token_cache,
+)
 
 logger = get_logger(__name__)
 
@@ -98,6 +103,18 @@ class PodchaserChartScraper:
                     "variables": {"country": country.upper(), "category": category, "first": 50},
                 },
             )
+            if resp.status_code in (401, 403):
+                # The cached token was rejected (revoked / rotated). Clear it so
+                # the next run re-exchanges instead of replaying it until TTL.
+                reset_token_cache()
+                logger.error(
+                    "podchaser charts: auth rejected (HTTP %d) for %s/%s - cleared "
+                    "cached access token so the next run re-exchanges",
+                    resp.status_code,
+                    country,
+                    category,
+                )
+                return []
             resp.raise_for_status()
             payload = resp.json()
 

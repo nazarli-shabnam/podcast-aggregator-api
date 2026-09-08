@@ -130,6 +130,54 @@ def test_category_slug_override(monkeypatch: pytest.MonkeyPatch) -> None:
     assert spotify_mod._category_slug("Kids & Family") == "kids-family-custom"
 
 
+def test_category_slug_empty_for_unresolvable_category(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A non-blank category that slugifies to nothing must return "" - never a
+    silent fall-back to the overall top-podcasts chart."""
+    monkeypatch.setattr(spotify_mod.settings, "spotify_category_slugs", {}, raising=False)
+    assert spotify_mod._category_slug("!!!") == ""
+    assert spotify_mod._category_slug("日本語") == ""
+    # blank / explicit top-podcasts still map to the overall chart
+    assert spotify_mod._category_slug("") == "top-podcasts"
+    assert spotify_mod._category_slug("top-podcasts") == "top-podcasts"
+
+
+async def test_fetch_fails_loudly_for_unresolvable_category(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """fetch() must not hit the network (which would return the overall chart)
+    for a category with no usable slug - it returns [] like the unknown-slug path."""
+    monkeypatch.setattr(spotify_mod.settings, "spotify_category_slugs", {}, raising=False)
+    called = False
+
+    async def _fake_request(client, method, url, **kwargs):  # noqa: ANN001
+        nonlocal called
+        called = True
+        return _FakeResp([])
+
+    monkeypatch.setattr(spotify_mod, "request_with_retry", _fake_request)
+
+    assert await SpotifyChartScraper().fetch("us", "日本語") == []
+    assert called is False
+
+
+def test_spotify_category_slugs_parses_env_string() -> None:
+    from app.core.config import Settings
+
+    parsed = Settings(
+        spotify_category_slugs="Society & Culture=society-culture, Kids & Family = kids-family "
+    ).spotify_category_slugs
+    assert parsed == {"society & culture": "society-culture", "kids & family": "kids-family"}
+
+
+def test_spotify_category_slugs_drops_malformed_pairs() -> None:
+    from app.core.config import Settings
+
+    parsed = Settings(
+        spotify_category_slugs="good=g, nokey, =noval, noval=, x = y"
+    ).spotify_category_slugs
+    assert parsed == {"good": "g", "x": "y"}
+
+
 async def test_feed_resolution_failure_is_caught_and_logged(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
