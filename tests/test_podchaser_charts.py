@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from app.schemas.common import ChartSource
+from app.services import podchaser_api
 from app.services.charts import podchaser as podchaser_mod
 from app.services.charts.podchaser import PodchaserChartScraper, _map_entry
 from app.services.exceptions import ConfigError
@@ -25,6 +26,17 @@ def _set_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "app.core.config.settings.podchaser_client_secret", "csecret", raising=False
     )
+
+
+def _patch_request(monkeypatch: pytest.MonkeyPatch, responses: list[_FakeResp]) -> None:
+    """Serve ``responses`` in order to both the shared token call
+    (``podchaser_api``) and the chart GraphQL call (``podchaser_mod``)."""
+
+    async def _fake_request(*args: object, **kwargs: object) -> _FakeResp:
+        return responses.pop(0)
+
+    monkeypatch.setattr(podchaser_api, "request_with_retry", _fake_request)
+    monkeypatch.setattr(podchaser_mod, "request_with_retry", _fake_request)
 
 
 async def test_fetch_maps_graphql_response(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -57,10 +69,7 @@ async def test_fetch_maps_graphql_response(monkeypatch: pytest.MonkeyPatch) -> N
         ),
     ]
 
-    async def _fake_request(*args: object, **kwargs: object) -> _FakeResp:
-        return responses.pop(0)
-
-    monkeypatch.setattr(podchaser_mod, "request_with_retry", _fake_request)
+    _patch_request(monkeypatch, responses)
 
     entries = await PodchaserChartScraper().fetch("us", "technology")
     assert len(entries) == 1
@@ -82,27 +91,21 @@ async def test_fetch_returns_empty_without_credentials(monkeypatch: pytest.Monke
 
 async def test_token_endpoint_missing_access_token_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_credentials(monkeypatch)
-
-    async def _fake_request(*args: object, **kwargs: object) -> _FakeResp:
-        return _FakeResp({})
-
-    monkeypatch.setattr(podchaser_mod, "request_with_retry", _fake_request)
+    _patch_request(monkeypatch, [_FakeResp({})])
     with pytest.raises(ConfigError):
-        await podchaser_mod._fetch_access_token()
+        await podchaser_api.fetch_access_token()
 
 
 async def test_fetch_handles_graphql_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_credentials(monkeypatch)
 
-    responses = [
-        _FakeResp({"access_token": "tok123"}),
-        _FakeResp({"errors": [{"message": "boom"}]}),
-    ]
-
-    async def _fake_request(*args: object, **kwargs: object) -> _FakeResp:
-        return responses.pop(0)
-
-    monkeypatch.setattr(podchaser_mod, "request_with_retry", _fake_request)
+    _patch_request(
+        monkeypatch,
+        [
+            _FakeResp({"access_token": "tok123"}),
+            _FakeResp({"errors": [{"message": "boom"}]}),
+        ],
+    )
     assert await PodchaserChartScraper().fetch("us", "technology") == []
 
 
@@ -143,10 +146,7 @@ async def test_fetch_skips_entry_missing_rank_without_crashing_task(
         ),
     ]
 
-    async def _fake_request(*args: object, **kwargs: object) -> _FakeResp:
-        return responses.pop(0)
-
-    monkeypatch.setattr(podchaser_mod, "request_with_retry", _fake_request)
+    _patch_request(monkeypatch, responses)
 
     entries = await PodchaserChartScraper().fetch("us", "technology")
     assert len(entries) == 1
@@ -157,26 +157,24 @@ async def test_fetch_skips_entry_missing_rank_without_crashing_task(
 async def test_fetch_skips_entries_missing_rss_or_title(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_credentials(monkeypatch)
 
-    responses = [
-        _FakeResp({"access_token": "tok123"}),
-        _FakeResp(
-            {
-                "data": {
-                    "topCharts": {
-                        "data": [
-                            {"rank": 1, "podcast": {"title": "No RSS"}},
-                            {"rank": 2, "podcast": {"rssUrl": "https://x/y"}},
-                        ]
+    _patch_request(
+        monkeypatch,
+        [
+            _FakeResp({"access_token": "tok123"}),
+            _FakeResp(
+                {
+                    "data": {
+                        "topCharts": {
+                            "data": [
+                                {"rank": 1, "podcast": {"title": "No RSS"}},
+                                {"rank": 2, "podcast": {"rssUrl": "https://x/y"}},
+                            ]
+                        }
                     }
                 }
-            }
-        ),
-    ]
-
-    async def _fake_request(*args: object, **kwargs: object) -> _FakeResp:
-        return responses.pop(0)
-
-    monkeypatch.setattr(podchaser_mod, "request_with_retry", _fake_request)
+            ),
+        ],
+    )
     assert await PodchaserChartScraper().fetch("us", "technology") == []
 
 

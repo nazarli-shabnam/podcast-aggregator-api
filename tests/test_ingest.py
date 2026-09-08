@@ -187,6 +187,29 @@ async def test_enrich_podcast_merges_metadata(db_session, stub_spotify_scraper) 
     assert podcast.external_ids["apple"] == "a99"
 
 
+async def test_chart_reingest_preserves_enriched_categories(
+    db_session, stub_spotify_scraper
+) -> None:
+    """Regression: the daily chart re-scrape must not clobber the category
+    list a prior enrichment expanded - it should only add its own category."""
+    ids = await ingest_chart(db_session, ChartSource.SPOTIFY, "us", "technology")
+    pid = ids[0]
+
+    class _Client:
+        name = "fake"
+
+        async def enrich(self, *, title, rss_feed_url, external_ids):
+            return PodcastMetadataDTO(categories=["News", "Society & Culture"])
+
+    await enrich_podcast(db_session, pid, clients=[_Client()])
+
+    # same chart scraped again (only carries "technology")
+    await ingest_chart(db_session, ChartSource.SPOTIFY, "us", "technology")
+
+    podcast = await db_session.get(Podcast, pid)
+    assert {"News", "Society & Culture", "technology"} <= set(podcast.categories)
+
+
 async def test_enrich_podcast_handles_config_error(db_session, stub_spotify_scraper) -> None:
     ids = await ingest_chart(db_session, ChartSource.SPOTIFY, "us", "technology")
 

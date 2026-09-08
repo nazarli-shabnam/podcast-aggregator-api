@@ -5,12 +5,15 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import func
+from sqlalchemy import cast, func, select
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Episode, Podcast
 
+# ``categories`` is merged (union, de-duplicated) rather than overwritten - see
+# _categories_union - so it is handled separately from the plain-overwrite columns.
 _PODCAST_UPDATE_COLUMNS = (
     "title",
     "description",
@@ -18,20 +21,36 @@ _PODCAST_UPDATE_COLUMNS = (
     "publisher",
     "rating_average",
     "rating_count",
-    "categories",
 )
+
+
+def _categories_union(insert_stmt: Any) -> Any:
+    """ON CONFLICT expression: existing ``categories`` ∪ incoming, de-duplicated.
+
+    A chart scrape only knows the one chart category, so a blind overwrite would
+    wipe the richer list a prior enrichment stored. Union instead, so a re-ingest
+    only ever *adds*.
+    """
+    combined = Podcast.categories.op("||")(insert_stmt.excluded.categories)
+    element = func.jsonb_array_elements_text(combined).column_valued("value")
+    return select(
+        func.coalesce(func.jsonb_agg(element.distinct()), cast([], JSONB))
+    ).scalar_subquery()
 
 
 async def upsert_podcast(session: AsyncSession, values: dict[str, Any]) -> uuid.UUID:
     """Insert or update a podcast keyed by ``rss_feed_url``; returns its id.
 
-    ``external_ids`` is merged (existing keys preserved) rather than replaced.
+    ``external_ids`` and ``categories`` are merged (existing values preserved)
+    rather than replaced; every other column is overwritten.
     """
     insert_stmt = pg_insert(Podcast).values(**values)
     set_: dict[str, Any] = {
         col: insert_stmt.excluded[col] for col in _PODCAST_UPDATE_COLUMNS if col in values
     }
     set_["external_ids"] = Podcast.external_ids.op("||")(insert_stmt.excluded.external_ids)
+    if "categories" in values:
+        set_["categories"] = _categories_union(insert_stmt)
     set_["updated_at"] = func.now()
     stmt = insert_stmt.on_conflict_do_update(
         index_elements=["rss_feed_url"],

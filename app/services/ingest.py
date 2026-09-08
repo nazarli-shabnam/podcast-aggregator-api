@@ -136,13 +136,9 @@ def _merge_metadata(base: Podcast, meta: PodcastMetadataDTO) -> dict[str, object
     for field_name, value in asdict(meta).items():
         if value in (None, [], {}) or field_name == "rss_feed_url":
             continue
-        if field_name == "categories":
-            merged = sorted({*base.categories, *value})
-            payload["categories"] = merged
-        elif field_name == "external_ids":
-            payload["external_ids"] = {**base.external_ids, **value}
-        else:
-            payload[field_name] = value
+        # ``categories`` and ``external_ids`` are unioned with the existing row
+        # inside upsert_podcast, so pass the incoming values through as-is.
+        payload[field_name] = value
     return payload
 
 

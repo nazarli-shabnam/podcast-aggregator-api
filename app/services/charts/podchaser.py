@@ -1,11 +1,8 @@
 """Podchaser podcast charts scraper - real GraphQL integration.
 
-Podchaser publishes a public GraphQL API (https://api-docs.podchaser.com)
-authenticated via OAuth2 client-credentials: exchange ``PODCHASER_CLIENT_ID``
-/ ``PODCHASER_CLIENT_SECRET`` for a bearer token at ``/token``, then query
-``topCharts`` at ``/graphql``. Field names below match Podchaser's public
-schema at the time of writing; if their schema changes, adjust the query
-and :func:`_map_entry` accordingly.
+Queries ``topCharts`` on Podchaser's GraphQL API. Auth, the numeric-coercion
+helper and the endpoint URLs are shared with the enrichment client via
+:mod:`app.services.podchaser_api`.
 
 Without credentials configured, :meth:`PodchaserChartScraper.fetch` logs a
 warning and returns an empty list rather than raising - callers (see
@@ -17,29 +14,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.core.config import settings
 from app.core.logging import get_logger
 from app.schemas.common import ChartSource
 from app.services.dto import ChartEntryDTO
 from app.services.exceptions import ConfigError
 from app.services.http import build_client, request_with_retry
+from app.services.podchaser_api import GRAPHQL_URL, coerce_number, fetch_access_token
 
 logger = get_logger(__name__)
-
-
-def _coerce_number[T: (int, float)](value: Any, cast: type[T]) -> T | None:
-    """Best-effort numeric coercion; ``None`` for missing or unparseable
-    upstream values so one bad rating field never aborts the scrape."""
-    if value is None:
-        return None
-    try:
-        return cast(value)
-    except (TypeError, ValueError):
-        return None
-
-
-_TOKEN_URL = "https://api.podchaser.com/token"
-_GRAPHQL_URL = "https://api.podchaser.com/graphql"
 
 _TOP_CHARTS_QUERY = """
 query TopCharts($country: String!, $category: String!, $first: Int!) {
@@ -60,30 +42,6 @@ query TopCharts($country: String!, $category: String!, $first: Int!) {
   }
 }
 """
-
-
-async def _fetch_access_token() -> str:
-    client_id = settings.podchaser_client_id
-    client_secret = settings.podchaser_client_secret
-    if not client_id or not client_secret:
-        raise ConfigError("PODCHASER_CLIENT_ID / PODCHASER_CLIENT_SECRET not configured")
-
-    async with build_client() as client:
-        resp = await request_with_retry(
-            client,
-            "POST",
-            _TOKEN_URL,
-            json={
-                "grant_type": "client_credentials",
-                "client_id": client_id,
-                "client_secret": client_secret,
-            },
-        )
-        resp.raise_for_status()
-        token = resp.json().get("access_token")
-    if not token:
-        raise ConfigError("Podchaser token endpoint returned no access_token")
-    return str(token)
 
 
 def _map_entry(rank_entry: dict[str, Any], country: str, category: str) -> ChartEntryDTO | None:
@@ -115,8 +73,8 @@ def _map_entry(rank_entry: dict[str, Any], country: str, category: str) -> Chart
         rss_feed_url=rss_url,
         publisher=podcast.get("author"),
         image_url=podcast.get("imageUrl"),
-        rating_average=_coerce_number(podcast.get("ratingAverage"), float),
-        rating_count=_coerce_number(podcast.get("ratingCount"), int),
+        rating_average=coerce_number(podcast.get("ratingAverage"), float),
+        rating_count=coerce_number(podcast.get("ratingCount"), int),
         external_ids={"podchaser": str(podcast["id"])} if podcast.get("id") else {},
     )
 
@@ -126,7 +84,7 @@ class PodchaserChartScraper:
 
     async def fetch(self, country: str, category: str) -> list[ChartEntryDTO]:
         try:
-            token = await _fetch_access_token()
+            token = await fetch_access_token()
         except ConfigError as exc:
             logger.warning("podchaser charts skipped: %s", exc)
             return []
@@ -135,7 +93,7 @@ class PodchaserChartScraper:
             resp = await request_with_retry(
                 client,
                 "POST",
-                _GRAPHQL_URL,
+                GRAPHQL_URL,
                 json={
                     "query": _TOP_CHARTS_QUERY,
                     "variables": {"country": country.upper(), "category": category, "first": 50},
