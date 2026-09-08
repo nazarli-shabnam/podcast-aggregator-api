@@ -46,6 +46,8 @@ async def test_fetch_maps_graphql_response(monkeypatch: pytest.MonkeyPatch) -> N
                                     "imageUrl": "https://img/f.jpg",
                                     "rssUrl": "https://feeds.example.com/founders-and-funders",
                                     "webUrl": "https://podchaser.com/x",
+                                    "ratingAverage": 4.6,
+                                    "ratingCount": 812,
                                 },
                             }
                         ]
@@ -68,6 +70,8 @@ async def test_fetch_maps_graphql_response(monkeypatch: pytest.MonkeyPatch) -> N
     assert entry.title == "Founders & Funders"
     assert entry.rss_feed_url == "https://feeds.example.com/founders-and-funders"
     assert entry.external_ids == {"podchaser": "77"}
+    assert entry.rating_average == 4.6
+    assert entry.rating_count == 812
 
 
 async def test_fetch_returns_empty_without_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -174,6 +178,34 @@ async def test_fetch_skips_entries_missing_rss_or_title(monkeypatch: pytest.Monk
 
     monkeypatch.setattr(podchaser_mod, "request_with_retry", _fake_request)
     assert await PodchaserChartScraper().fetch("us", "technology") == []
+
+
+def test_map_entry_tolerates_missing_or_bad_rating() -> None:
+    no_rating = _map_entry(
+        {"rank": 1, "podcast": {"title": "No Rating", "rssUrl": "https://x/y"}},
+        "us",
+        "technology",
+    )
+    assert no_rating is not None
+    assert no_rating.rating_average is None
+    assert no_rating.rating_count is None
+
+    bad_rating = _map_entry(
+        {
+            "rank": 2,
+            "podcast": {
+                "title": "Bad Rating",
+                "rssUrl": "https://x/z",
+                "ratingAverage": "n/a",
+                "ratingCount": "n/a",
+            },
+        },
+        "us",
+        "technology",
+    )
+    assert bad_rating is not None
+    assert bad_rating.rating_average is None
+    assert bad_rating.rating_count is None
 
 
 def test_map_entry_rejects_non_dict_entry() -> None:

@@ -18,6 +18,8 @@ class ChartEntryDTO:
     rss_feed_url: str
     publisher: str | None = None
     image_url: str | None = None
+    rating_average: float | None = None
+    rating_count: int | None = None
     external_ids: dict[str, str] = field(default_factory=dict)
 
 

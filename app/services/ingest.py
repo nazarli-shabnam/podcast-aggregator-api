@@ -26,17 +26,23 @@ logger = get_logger(__name__)
 
 
 async def _resolve_podcast_id(session: AsyncSession, entry: ChartEntryDTO) -> uuid.UUID:
-    return await upsert_podcast(
-        session,
-        {
-            "title": entry.title,
-            "publisher": entry.publisher,
-            "image_url": entry.image_url,
-            "rss_feed_url": entry.rss_feed_url,
-            "categories": [entry.category],
-            "external_ids": entry.external_ids or {},
-        },
-    )
+    values: dict[str, object] = {
+        "title": entry.title,
+        "publisher": entry.publisher,
+        "image_url": entry.image_url,
+        "rss_feed_url": entry.rss_feed_url,
+        "categories": [entry.category],
+        "external_ids": entry.external_ids or {},
+    }
+    # Only sources that actually carry ratings (Podchaser) set these. Omitting
+    # the keys when absent keeps rating_count (NOT NULL) valid on INSERT and
+    # leaves any existing rating untouched on a later Spotify re-ingest of the
+    # same feed - see upsert_podcast's "if col in values" update filter.
+    if entry.rating_average is not None:
+        values["rating_average"] = entry.rating_average
+    if entry.rating_count is not None:
+        values["rating_count"] = entry.rating_count
+    return await upsert_podcast(session, values)
 
 
 async def ingest_chart(

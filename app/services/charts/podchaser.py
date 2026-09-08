@@ -26,6 +26,18 @@ from app.services.http import build_client, request_with_retry
 
 logger = get_logger(__name__)
 
+
+def _coerce_number[T: (int, float)](value: Any, cast: type[T]) -> T | None:
+    """Best-effort numeric coercion; ``None`` for missing or unparseable
+    upstream values so one bad rating field never aborts the scrape."""
+    if value is None:
+        return None
+    try:
+        return cast(value)
+    except (TypeError, ValueError):
+        return None
+
+
 _TOKEN_URL = "https://api.podchaser.com/token"
 _GRAPHQL_URL = "https://api.podchaser.com/graphql"
 
@@ -41,6 +53,8 @@ query TopCharts($country: String!, $category: String!, $first: Int!) {
         rssUrl
         webUrl
         id
+        ratingAverage
+        ratingCount
       }
     }
   }
@@ -101,6 +115,8 @@ def _map_entry(rank_entry: dict[str, Any], country: str, category: str) -> Chart
         rss_feed_url=rss_url,
         publisher=podcast.get("author"),
         image_url=podcast.get("imageUrl"),
+        rating_average=_coerce_number(podcast.get("ratingAverage"), float),
+        rating_count=_coerce_number(podcast.get("ratingCount"), int),
         external_ids={"podchaser": str(podcast["id"])} if podcast.get("id") else {},
     )
 
