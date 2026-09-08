@@ -59,7 +59,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
-      - name: Ruff (lint)
+      - name: Ruff (lint + flake8-bandit security rules)
         run: ruff check .
 
       - name: Black (format check)
@@ -67,6 +67,9 @@ jobs:
 
       - name: Mypy (strict types)
         run: mypy app
+
+      - name: pip-audit (dependency vulnerability scan)
+        run: pip-audit --skip-editable
 
       - name: Alembic migrations
         run: alembic upgrade head

@@ -9,8 +9,9 @@ for downstream applications.
 
 - **Automated Scraping** – Scheduled daily extraction of Spotify and Podchaser charts grouped
   by country and category.
-- **Data Enrichment** – Automatic metadata fetching (descriptions, covers, publisher details)
-  and episode tracking via external APIs (Apple Podcasts, Podcast Index) and RSS feeds.
+- **Data Enrichment** – Automatic metadata fetching (descriptions, covers, publisher details,
+  ratings) and episode tracking via external APIs (Apple Podcasts, Podcast Index, Podchaser)
+  and RSS feeds.
 - **Scalable Architecture** – PostgreSQL declarative RANGE partitioning of `chart_snapshots`,
   strategic composite indexing, and idempotent UPSERT ingestion.
 - **RESTful API** – Low-latency endpoints for filtered chart views, paginated podcast lists
@@ -67,7 +68,11 @@ fixture-backed.
   the Apple iTunes Search enrichment client; a show with no resolvable feed is skipped
   (logged), not treated as a scrape failure.
 - **Podchaser charts** — real OAuth2 client-credentials + GraphQL integration.
-- **Apple Podcasts / Podcast Index** — enrichment (title, description, categories, ratings).
+- **Apple Podcasts** — keyless enrichment (title, publisher, cover, categories, **ratings** —
+  `averageUserRating` / `userRatingCount`).
+- **Podcast Index** — enrichment (title, description, categories); no ratings.
+- **Podchaser** — enrichment (title, description, categories, ratings); also the charts source
+  above. Both use the shared OAuth2 client-credentials plumbing.
 
 Integrations that need credentials skip gracefully (log a warning, contribute no data) when
 unset, rather than failing the ingestion task:
@@ -75,16 +80,26 @@ unset, rather than failing the ingestion task:
 | Integration | Env vars |
 |---|---|
 | Podcast Index enrichment | `PODCASTINDEX_API_KEY`, `PODCASTINDEX_API_SECRET` |
-| Podchaser chart scraping | `PODCHASER_CLIENT_ID`, `PODCHASER_CLIENT_SECRET` (OAuth2 client-credentials) |
+| Podchaser chart scraping **and** enrichment | `PODCHASER_CLIENT_ID`, `PODCHASER_CLIENT_SECRET` (OAuth2 client-credentials) |
 
 Apple Podcasts (iTunes Search) and Spotify charts are both keyless — no credentials needed.
 
 ### Publishing frequency
 
 `podcasts.release_frequency_days` is not fetched from any source — none of Apple, Podcast
-Index, or Podchaser publish it. It's derived after every episode sync
+Index, or Podchaser publish it. It's derived **after every episode sync**
 (`app/services/ingest.py::sync_episodes`): the median number of days between the podcast's
-most recent dated episodes, or `NULL` with fewer than two to compare.
+most recent dated episodes, or `NULL` with fewer than two to compare. A podcast that has
+been charted but not yet episode-synced therefore reports `NULL` until the next
+`sync_all_tracked_episodes_task` run (every 6h) reaches it — this is by design, not a gap.
+
+### Scope: podcast-level granularity
+
+Charts and enrichment operate at **podcast** granularity. The spec mentions "top episodes"
+as an alternative chart shape; the two chart sources in use (Spotify's `podcastcharts`
+JSON and Podchaser's `topCharts` GraphQL query) return podcast rankings only, so
+episode-level charts and episode-level enrichment are intentionally not implemented.
+Episodes are still fully tracked per podcast via RSS (`GET /api/v1/podcasts/{id}`).
 
 ## API
 
@@ -96,10 +111,12 @@ backed by Redis so it holds across multiple API instances. `/health`, `/docs`, a
 
 | Method & path | Description |
 |---|---|
-| `GET /health` | Liveness + DB check (no API key required) |
-| `GET /api/v1/charts` | `country`, `category`, `source` (spotify\|podchaser), `date` (default today) |
-| `GET /api/v1/podcasts` | `page`, `page_size`, `q` (title/publisher ILIKE), `category` – offset paginated |
+| `GET /health` | Liveness + DB check (no API key required); returns `503` when the DB check fails |
+| `GET /api/v1/charts` | **required:** `country`, `category`, `source` (`spotify`\|`podchaser`); optional: `date` (defaults to the most recent scraped snapshot for that country/category/source, *not* the calendar day) |
+| `GET /api/v1/podcasts` | `page`, `page_size`, `q` (title/publisher ILIKE), `category` (case-insensitive) – offset paginated |
 | `GET /api/v1/podcasts/{id}` | Detail + cursor-paginated episodes (`cursor`, `limit`) |
+
+Omitting any of `country`, `category`, or `source` on `/api/v1/charts` is a `422`.
 
 `/api/v1/*` responses: `401` for a missing/invalid `X-API-Key`, `429` (with a `Retry-After`
 header) once a key exceeds its rate limit.
@@ -107,12 +124,14 @@ header) once a key exceeds its rate limit.
 ## Quality gates
 
 ```bash
-ruff check .
+ruff check .          # lint + flake8-bandit ("S") security rules
 black --check .
-mypy app
+mypy app              # strict
+pip-audit             # known-vulnerability scan of installed dependencies
 pytest --cov=app --cov-report=term-missing --cov-fail-under=90
 ```
 
 All of the above run in CI (`.github/workflows/ci.yml`) on every pull request to `main`
-against live PostgreSQL and Redis services. `main` is protected by a repository ruleset
-configured in GitHub Settings → Rules (PR required, `ci` must pass, linear history).
+against live PostgreSQL and Redis services. The coverage gate is **90%**. `main` is
+protected by a repository ruleset configured in GitHub Settings → Rules (PR required,
+`ci` must pass, linear history).

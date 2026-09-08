@@ -31,6 +31,7 @@ dev = [
     "mypy>=1.10",
     "types-redis",
     "psycopg[binary]>=3.1",
+    "pip-audit>=2.7",
 ]
 
 [tool.setuptools.packages.find]
@@ -41,14 +42,15 @@ line-length = 100
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "C4", "SIM", "ASYNC"]
+select = ["E", "F", "I", "UP", "B", "C4", "SIM", "ASYNC", "S"]
 ignore = [
     "B008",   # FastAPI Depends() in argument defaults
     "UP046",  # keep Generic[T] base for Pydantic v2 generic models
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101"]
+# Tests: assert is the point (S101); bind-all / hardcoded dummy creds are fine.
+"tests/**" = ["S101", "S105", "S106", "S104", "S311"]
 
 [tool.black]
 line-length = 100
