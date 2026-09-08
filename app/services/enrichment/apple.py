@@ -17,12 +17,19 @@ _LOOKUP_URL = "https://itunes.apple.com/lookup"
 def _map_result(result: dict[str, Any]) -> PodcastMetadataDTO:
     genres = [g for g in result.get("genres", []) if g and g != "Podcasts"]
     apple_id = result.get("collectionId") or result.get("trackId")
+    # iTunes exposes ratings on most podcast results. Only carry them when a
+    # rating average is actually present - otherwise a "0 ratings" result
+    # would overwrite a real rating a later (Podchaser) pass had stored.
+    rating_average = result.get("averageUserRating")
+    rating_count = result.get("userRatingCount") if rating_average is not None else None
     return PodcastMetadataDTO(
         title=result.get("collectionName") or result.get("trackName"),
         publisher=result.get("artistName"),
         image_url=result.get("artworkUrl600") or result.get("artworkUrl100"),
         rss_feed_url=result.get("feedUrl"),
         categories=genres,
+        rating_average=rating_average,
+        rating_count=rating_count,
         external_ids={"apple": str(apple_id)} if apple_id else {},
     )
 

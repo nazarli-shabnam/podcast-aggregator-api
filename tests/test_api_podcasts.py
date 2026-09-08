@@ -67,8 +67,11 @@ async def test_list_podcasts_category_filter(client, db_session) -> None:
     titles = [i["title"] for i in resp.json()["items"]]
     assert titles == ["Tech Weekly"]
 
-    # JSONB containment is case-sensitive
-    assert (await client.get("/api/v1/podcasts", params={"category": "news"})).json()["items"] == []
+    # Categories are stored canonicalised, so the filter is case-insensitive:
+    # "news", "News" and "  NEWS " all resolve to the same stored label.
+    for variant in ("news", "NEWS", "  News "):
+        got = await client.get("/api/v1/podcasts", params={"category": variant})
+        assert [i["title"] for i in got.json()["items"]] == ["Tech Weekly"], variant
 
 
 async def test_podcast_detail_cursor_pagination(client, db_session) -> None:

@@ -32,7 +32,10 @@ async def test_upsert_podcast_inserts_then_merges_external_ids(db_session) -> No
 
 async def test_upsert_podcast_unions_categories_on_conflict(db_session) -> None:
     """A chart scrape only knows one category; it must not wipe the richer
-    list a prior enrichment stored - the two are unioned, de-duplicated."""
+    list a prior enrichment stored - the two are unioned, de-duplicated.
+    Every label is also canonicalised (trimmed + lower-cased) so mixed-case
+    duplicates from different sources collapse to one entry.
+    """
     pid = await upsert_podcast(
         db_session,
         {
@@ -46,11 +49,11 @@ async def test_upsert_podcast_unions_categories_on_conflict(db_session) -> None:
         {
             "title": "Cat Show",
             "rss_feed_url": "https://feeds.test/cat",
-            "categories": ["Technology", "Business"],
+            "categories": ["  technology ", "Business", "NEWS"],
         },
     )
     podcast = await db_session.get(Podcast, pid)
-    assert set(podcast.categories) == {"News", "Technology", "Business"}
+    assert set(podcast.categories) == {"news", "technology", "business"}
 
     # an empty / absent categories value leaves the stored list untouched
     await upsert_podcast(
@@ -61,7 +64,7 @@ async def test_upsert_podcast_unions_categories_on_conflict(db_session) -> None:
         db_session, {"title": "Cat Show 2", "rss_feed_url": "https://feeds.test/cat"}
     )
     await db_session.refresh(podcast)
-    assert set(podcast.categories) == {"News", "Technology", "Business"}
+    assert set(podcast.categories) == {"news", "technology", "business"}
 
 
 async def test_upsert_episodes_is_idempotent(db_session) -> None:

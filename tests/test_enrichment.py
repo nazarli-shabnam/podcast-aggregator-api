@@ -52,6 +52,58 @@ async def test_apple_enrich_maps_search_result(monkeypatch: pytest.MonkeyPatch) 
     assert meta.external_ids == {"apple": "42"}
 
 
+async def test_apple_enrich_maps_ratings(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = {
+        "results": [
+            {
+                "collectionName": "Rated Show",
+                "feedUrl": "https://feeds.example.com/rated",
+                "collectionId": 7,
+                "averageUserRating": 4.7,
+                "userRatingCount": 1234,
+            }
+        ]
+    }
+
+    async def _fake_request(*a: object, **k: object) -> _FakeResp:
+        return _FakeResp(payload)
+
+    monkeypatch.setattr(apple_mod, "request_with_retry", _fake_request)
+    meta = await AppleEnrichmentClient().enrich(
+        title="Rated Show", rss_feed_url="https://feeds.example.com/rated", external_ids={}
+    )
+    assert meta is not None
+    assert meta.rating_average == 4.7
+    assert meta.rating_count == 1234
+
+
+async def test_apple_enrich_omits_rating_count_when_no_average(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A result carrying only userRatingCount (no average) must not surface a
+    rating - it would clobber a real rating from another source downstream."""
+    payload = {
+        "results": [
+            {
+                "collectionName": "Unrated Show",
+                "feedUrl": "https://feeds.example.com/unrated",
+                "userRatingCount": 0,
+            }
+        ]
+    }
+
+    async def _fake_request(*a: object, **k: object) -> _FakeResp:
+        return _FakeResp(payload)
+
+    monkeypatch.setattr(apple_mod, "request_with_retry", _fake_request)
+    meta = await AppleEnrichmentClient().enrich(
+        title="Unrated Show", rss_feed_url="https://feeds.example.com/unrated", external_ids={}
+    )
+    assert meta is not None
+    assert meta.rating_average is None
+    assert meta.rating_count is None
+
+
 async def test_apple_enrich_by_id_and_no_results(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _empty(*a: object, **k: object) -> _FakeResp:
         return _FakeResp({"results": []})
@@ -301,6 +353,26 @@ async def test_podchaser_enrichment_title_search_fallback(monkeypatch: pytest.Mo
     )
     assert meta is not None and meta.title == "Found"
     assert any("podcasts(" in q for q in seen)
+
+
+async def test_podchaser_access_token_is_cached_across_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _pc_creds(monkeypatch)
+    from app.services import podchaser_api
+
+    calls = 0
+
+    async def _fake_token_request(*a: object, **k: object) -> _FakeResp:
+        nonlocal calls
+        calls += 1
+        return _FakeResp({"access_token": "tok", "expires_in": 3600})
+
+    monkeypatch.setattr(podchaser_api, "request_with_retry", _fake_token_request)
+
+    assert await podchaser_api.fetch_access_token() == "tok"
+    assert await podchaser_api.fetch_access_token() == "tok"
+    assert calls == 1  # second call served from the in-process cache
 
 
 async def test_apple_enrich_falls_back_to_first_result_when_no_feed_url_matches(

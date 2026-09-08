@@ -49,7 +49,6 @@ async def test_ingest_chart_removes_stale_ranks_on_same_day_reingest(
         ChartEntryDTO(
             rank=i,
             source=ChartSource.SPOTIFY,
-            country="us",
             category="technology",
             title=f"Show {i}",
             rss_feed_url=f"https://feeds.test/show-{i}",
@@ -111,7 +110,6 @@ async def test_ingest_chart_persists_podchaser_ratings(db_session, monkeypatch) 
     entry = ChartEntryDTO(
         rank=1,
         source=ChartSource.PODCHASER,
-        country="us",
         category="technology",
         title="Rated Show",
         rss_feed_url="https://feeds.test/rated-show",
@@ -135,7 +133,6 @@ async def test_spotify_reingest_preserves_existing_ratings(db_session, monkeypat
     rated = ChartEntryDTO(
         rank=1,
         source=ChartSource.PODCHASER,
-        country="us",
         category="technology",
         title="Shared Show",
         rss_feed_url=feed,
@@ -150,7 +147,6 @@ async def test_spotify_reingest_preserves_existing_ratings(db_session, monkeypat
     unrated = ChartEntryDTO(
         rank=1,
         source=ChartSource.SPOTIFY,
-        country="us",
         category="technology",
         title="Shared Show",
         rss_feed_url=feed,
@@ -207,7 +203,39 @@ async def test_chart_reingest_preserves_enriched_categories(
     await ingest_chart(db_session, ChartSource.SPOTIFY, "us", "technology")
 
     podcast = await db_session.get(Podcast, pid)
-    assert {"News", "Society & Culture", "technology"} <= set(podcast.categories)
+    # categories are stored canonicalised (trimmed + lower-cased)
+    assert {"news", "society & culture", "technology"} <= set(podcast.categories)
+
+
+async def test_enrich_podcast_stores_ratings_then_later_client_wins(
+    db_session, stub_spotify_scraper
+) -> None:
+    """Apple-style ratings must reach the podcast row, and a later client in
+    the chain (Podchaser) still overrides them."""
+    ids = await ingest_chart(db_session, ChartSource.SPOTIFY, "us", "technology")
+    pid = ids[0]
+
+    class _Apple:
+        name = "apple"
+
+        async def enrich(self, *, title, rss_feed_url, external_ids):
+            return PodcastMetadataDTO(rating_average=4.1, rating_count=90)
+
+    class _Podchaser:
+        name = "podchaser"
+
+        async def enrich(self, *, title, rss_feed_url, external_ids):
+            return PodcastMetadataDTO(rating_average=4.9, rating_count=5000)
+
+    await enrich_podcast(db_session, pid, clients=[_Apple()])
+    podcast = await db_session.get(Podcast, pid)
+    assert float(podcast.rating_average) == 4.1
+    assert podcast.rating_count == 90
+
+    await enrich_podcast(db_session, pid, clients=[_Apple(), _Podchaser()])
+    await db_session.refresh(podcast)
+    assert float(podcast.rating_average) == 4.9
+    assert podcast.rating_count == 5000
 
 
 async def test_enrich_podcast_handles_config_error(db_session, stub_spotify_scraper) -> None:

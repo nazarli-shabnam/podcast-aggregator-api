@@ -55,6 +55,21 @@ class Podcast(UUIDPKMixin, TimestampMixin, Base):
         UniqueConstraint("rss_feed_url", name="uq_podcasts_rss_feed_url"),
         Index("ix_podcasts_categories_gin", "categories", postgresql_using="gin"),
         Index("ix_podcasts_external_ids_gin", "external_ids", postgresql_using="gin"),
+        # Trigram GIN indexes backing the `q` ILIKE '%...%' search on
+        # /api/v1/podcasts. Created in migration 0001; declared here so the
+        # model matches the DB and `alembic revision --autogenerate` stays clean.
+        Index(
+            "ix_podcasts_title_trgm",
+            "title",
+            postgresql_using="gin",
+            postgresql_ops={"title": "gin_trgm_ops"},
+        ),
+        Index(
+            "ix_podcasts_publisher_trgm",
+            "publisher",
+            postgresql_using="gin",
+            postgresql_ops={"publisher": "gin_trgm_ops"},
+        ),
     )
 
 

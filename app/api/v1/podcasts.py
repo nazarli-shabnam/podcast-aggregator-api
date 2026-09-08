@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.cursor import decode_cursor, encode_cursor
 from app.api.deps import PageParams, page_params
 from app.core.db import get_session
+from app.core.normalize import normalize_category
 from app.db.models import Episode, Podcast
 from app.schemas.common import CursorPage, Page
 from app.schemas.episode import EpisodeRead
@@ -31,7 +32,9 @@ async def list_podcasts(
         pattern = f"%{q}%"
         filters.append(or_(Podcast.title.ilike(pattern), Podcast.publisher.ilike(pattern)))
     if category:
-        filters.append(Podcast.categories.contains([category]))
+        # Categories are stored canonicalised (app.core.normalize); match the
+        # query value the same way so ?category=News and ?category=news agree.
+        filters.append(Podcast.categories.contains([normalize_category(category)]))
 
     total = await session.scalar(select(func.count()).select_from(Podcast).where(*filters))
     rows = (
